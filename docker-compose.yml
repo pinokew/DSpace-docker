@@ -38,6 +38,12 @@ services:
     - dspacedb
     networks:
       - dspacenet
+    # Обмежуємо обсяг логів
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
     - published: 8080
       target: 8080
