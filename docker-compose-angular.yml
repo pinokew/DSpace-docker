@@ -23,7 +23,7 @@ services:
       DSPACE_UI_PORT: '4000'
       DSPACE_UI_NAMESPACE: /
       DSPACE_REST_SSL: 'false'
-      DSPACE_REST_HOST: localhost
+      DSPACE_REST_HOST: dspace
       DSPACE_REST_PORT: 8080
       DSPACE_REST_NAMESPACE: /server
       CI: "true"
