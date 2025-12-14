@@ -4,7 +4,6 @@ ui:
   port: 4000
   nameSpace: /
   useProxies: false
-
 rest:
   ssl: false
   host: localhost

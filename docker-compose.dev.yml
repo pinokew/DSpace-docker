@@ -1,0 +1,51 @@
+services:
+  dspace:
+    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace:${DSPACE_VER:-latest-test}"
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    ports:
+      - "8080:8080"
+      - "8000:8000"
+    stdin_open: true
+    tty: true
+
+  dspacedb:
+    ports:
+      - "5432:5432"
+    stdin_open: true
+    tty: true
+
+  dspacesolr:
+    ports:
+      - "8983:8983"
+    stdin_open: true
+    tty: true
+
+  dspace-angular:
+    container_name: dspace-angular
+    hostname: dspace-angular
+    depends_on:
+      - dspace
+    image: "dspace/dspace-angular:${DSPACE_VER:-latest}"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+    ports:
+      - "4000:4000"
+      - "9876:9876"
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./ui-config/config.yml:/app/config/config.yml:ro
+    environment:
+      DSPACE_UI_SSL: 'false'
+      DSPACE_UI_HOST: localhost
+      DSPACE_UI_PORT: '4000'
+      DSPACE_UI_NAMESPACE: /
+      DSPACE_REST_SSL: 'false'
+      DSPACE_REST_HOST: localhost
+      DSPACE_REST_PORT: 8080
+      DSPACE_REST_NAMESPACE: /server
