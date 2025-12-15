@@ -1,9 +1,3 @@
-networks:
-  dspacenet:
-    ipam:
-      config:
-        - subnet: 172.23.0.0/16
-
 services:
   dspace:
     container_name: dspace
@@ -90,3 +84,8 @@ volumes:
   pgdata:
   solr_data:
 
+networks:
+  dspacenet:
+    ipam:
+      config:
+        - subnet: 172.23.0.0/16
