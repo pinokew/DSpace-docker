@@ -1,144 +1,145 @@
-networks:
-  dspacenet:
-    ipam:
-      config:
-        # Define a custom subnet for our DSpace network, so that we can easily trust requests from host to container.
-        # If you customize this value, be sure to customize the 'proxies.trusted.ipranges' env variable below.
-        - subnet: 172.23.0.0/16
 services:
-  # DSpace (backend) webapp container
-  dspace:
-    container_name: dspace
+  dspacedb:
+    container_name: dspacedb
+    image: "docker.io/postgres:${POSTGRES_VERSION:-15}"
     environment:
-      # Below syntax may look odd, but it is how to override dspace.cfg settings via env variables.
-      # See https://github.com/DSpace/DSpace/blob/main/dspace/config/config-definition.xml
-      # __P__ => "." (e.g. dspace__P__dir => dspace.dir)
-      # __D__ => "-" (e.g. google__D__metadata => google-metadata)
-      # dspace.dir: Must match with Dockerfile's DSPACE_INSTALL directory.
-      dspace__P__dir: /dspace
-      # Uncomment to set a non-default value for dspace.server.url or dspace.ui.url
-      # dspace__P__server__P__url: http://localhost:8080/server
-      # dspace__P__ui__P__url: http://localhost:4000
-      dspace__P__name: 'DSpace Started with Docker Compose'
-      # db.url: Ensure we are using the 'dspacedb' image for our database
-      db__P__url: 'jdbc:postgresql://dspacedb:5432/dspace'
-      # solr.server: Ensure we are using the 'dspacesolr' image for Solr
-      solr__P__server: http://dspacesolr:8983/solr
-      # matomo.tracker.url: Ensure we are using the 'matomo' image for Matomo
-      matomo__P__tracker__P__url: http://matomo
-      # proxies.trusted.ipranges: This setting is required for a REST API running in Docker to trust requests
-      # from the host machine. This IP range MUST correspond to the 'dspacenet' subnet defined above.
-      proxies__P__trusted__P__ipranges: '172.23.0'
-      LOGGING_CONFIG: /dspace/config/log4j2-container.xml
-    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace:${DSPACE_VER:-latest-test}"
-    build:
-      context: .
-      dockerfile: Dockerfile.test
-    depends_on:
-    - dspacedb
+      TZ: ${TZ:-Europe/Kyiv}
+      PGDATA: ${POSTGRES_PGDATA:-/pgdata}
+      POSTGRES_DB: ${POSTGRES_DB:-dspace}
+      POSTGRES_USER: ${POSTGRES_USER:-dspace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dspace}
     networks:
       - dspacenet
-    # Обмежуємо обсяг логів
+    volumes:
+      - pgdata:${POSTGRES_PGDATA:-/pgdata}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dspace} -d ${POSTGRES_DB:-dspace} -h 127.0.0.1 -p ${POSTGRES_INTERNAL_PORT:-5432}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  dspacesolr:
+    container_name: dspacesolr
+    
+    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace-solr:${DSPACE_SOLR_VER:-latest}"
+    build:
+      context: ./dspace/src/main/docker/dspace-solr/
+      additional_contexts:
+        solrconfigs: ./dspace/solr/
+      args:
+        SOLR_VERSION: "${SOLR_VERSION:-9.8}"
+    environment:
+      TZ: ${TZ:-Europe/Kyiv}
+    networks:
+      - dspacenet
+    working_dir: /var/solr/data
+    volumes:
+      - solr_data:/var/solr/data
+    ports:
+      - "${SOLR_PORT:-8983}:8983"
+    user: root
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+        init-var-solr
+        precreate-core authority /opt/solr/server/solr/configsets/authority
+        cp -r /opt/solr/server/solr/configsets/authority/* authority
+        precreate-core oai /opt/solr/server/solr/configsets/oai
+        cp -r /opt/solr/server/solr/configsets/oai/* oai
+        precreate-core search /opt/solr/server/solr/configsets/search
+        cp -r /opt/solr/server/solr/configsets/search/* search
+        precreate-core statistics /opt/solr/server/solr/configsets/statistics
+        cp -r /opt/solr/server/solr/configsets/statistics/* statistics
+        precreate-core qaevent /opt/solr/server/solr/configsets/qaevent
+        cp -r /opt/solr/server/solr/configsets/qaevent/* qaevent
+        precreate-core suggestion /opt/solr/server/solr/configsets/suggestion
+        cp -r /opt/solr/server/solr/configsets/suggestion/* suggestion
+        chown -R solr:solr /var/solr
+        runuser -u solr -- solr-foreground
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${SOLR_INTERNAL_PORT:-8983}/solr/ >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+  dspace:
+    container_name: dspace
+    
+    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace:${DSPACE_REST_VER:-latest}"
+    environment:
+      TZ: ${TZ:-Europe/Kyiv}
+
+      # base dspace install dir
+      dspace__P__dir: ${DSPACE_DIR:-/dspace}
+
+      # human-readable instance name
+      dspace__P__name: ${DSPACE_NAME:-DSpace Started with Docker Compose}
+
+      # DB/Solr endpoints in docker network
+      db__P__url: "jdbc:postgresql://dspacedb:${POSTGRES_INTERNAL_PORT:-5432}/${POSTGRES_DB:-dspace}"
+      solr__P__server: "http://dspacesolr:${SOLR_INTERNAL_PORT:-8983}/solr"
+
+      # URL settings (важливо для логіну/redirect)
+      dspace__P__server__P__url: ${DSPACE_REST_BASEURL:-http://localhost:8080/server}
+      dspace__P__ui__P__url: ${DSPACE_UI_BASEURL:-http://localhost:4000/}
+
+      # Trusted proxy range must match subnet (перші 3 октети)
+      proxies__P__trusted__P__ipranges: ${PROXIES_TRUSTED_IPRANGES:-172.23.0}
+
+      LOGGING_CONFIG: ${DSPACE_LOGGING_CONFIG:-/dspace/config/log4j2-container.xml}
+
+      # (опційно) якщо Matomo не використовуєш — можеш прибрати
+      matomo__P__tracker__P__url: ${MATOMO_TRACKER_URL:-http://matomo}
+
+    depends_on:
+      dspacedb:
+        condition: service_healthy
+      dspacesolr:
+        condition: service_healthy
+    networks:
+      - dspacenet
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-    ports:
-    - published: 8080
-      target: 8080
-    - published: 8000
-      target: 8000
-    stdin_open: true
-    tty: true
     volumes:
-    # Keep DSpace assetstore directory between reboots
-    - assetstore:/dspace/assetstore
-    # Mount local [src]/dspace/config/ to container. This syncs your local configs with container
-    # NOTE: Environment variables specified above will OVERRIDE any configs in local.cfg or dspace.cfg
-    - ./dspace/config:/dspace/config
-    # Ensure that the database is ready BEFORE starting tomcat
-    # 1. While a TCP connection to dspacedb port 5432 is not available, continue to sleep
-    # 2. Then, run database migration to init database tables
-    # 3. Finally, start DSpace
+      - assetstore:/dspace/assetstore
+      - ./dspace/config:/dspace/config
+    ports:
+      - "${DSPACE_REST_PORT:-8080}:8080"
+      - "${DSPACE_REST_DEBUG_PORT:-8000}:8000"
     entrypoint:
-    - /bin/bash
-    - '-c'
-    - |
-      while (!</dev/tcp/dspacedb/5432) > /dev/null 2>&1; do sleep 1; done;
-      /dspace/bin/dspace database migrate
-      java -jar /dspace/webapps/server-boot.jar --dspace.dir=/dspace
-  # DSpace PostgreSQL database container
-  dspacedb:
-    container_name: dspacedb
-    # Uses the base PostgreSQL image
-    image: "docker.io/postgres:${POSTGRES_VERSION:-15}"
-    environment:
-      PGDATA: /pgdata
-      POSTGRES_DB: dspace
-      POSTGRES_USER: dspace
-      POSTGRES_PASSWORD: dspace
-    networks:
-      dspacenet:
-    ports:
-    - published: 5432
-      target: 5432
-    stdin_open: true
-    tty: true
-    volumes:
-    # Keep Postgres data directory between reboots
-    - pgdata:/pgdata
-  # DSpace Solr container
-  dspacesolr:
-    container_name: dspacesolr
-    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace-solr:${DSPACE_VER:-latest}"
-    build:
-      context: ./dspace/src/main/docker/dspace-solr/
-      # Provide path to Solr configs necessary to build Docker image
-      additional_contexts:
-        solrconfigs: ./dspace/solr/
-      args:
-        SOLR_VERSION: "${SOLR_VER:-9.8}"
-    networks:
-      dspacenet:
-    ports:
-    - published: 8983
-      target: 8983
-    stdin_open: true
-    tty: true
-    working_dir: /var/solr/data
-    volumes:
-    # Keep Solr data directory between reboots
-    - solr_data:/var/solr/data
-    # NOTE: We are not running Solr as "root", but we need root permissions to copy our cores to the mounted
-    # /var/solr/data directory. Then we start Solr as the "solr" user.
-    user: root
-    # Initialize all DSpace Solr cores then start Solr:
-    # * First, run precreate-core to create the core (if it doesn't yet exist). If exists already, this is a no-op
-    # * Second, copy configsets to this core:
-    #   Updates to Solr configs require the container to be rebuilt/restarted: `docker compose -p d7 up -d --build dspacesolr`
-    # * Third, ensure all new folders are owned by "solr" user
-    # * Finally, start Solr as the "solr" user via the provided solr-foreground script
-    entrypoint:
-    - /bin/bash
-    - '-c'
-    - |
-      init-var-solr
-      precreate-core authority /opt/solr/server/solr/configsets/authority
-      cp -r /opt/solr/server/solr/configsets/authority/* authority
-      precreate-core oai /opt/solr/server/solr/configsets/oai
-      cp -r /opt/solr/server/solr/configsets/oai/* oai
-      precreate-core search /opt/solr/server/solr/configsets/search
-      cp -r /opt/solr/server/solr/configsets/search/* search
-      precreate-core statistics /opt/solr/server/solr/configsets/statistics
-      cp -r /opt/solr/server/solr/configsets/statistics/* statistics
-      precreate-core qaevent /opt/solr/server/solr/configsets/qaevent
-      cp -r /opt/solr/server/solr/configsets/qaevent/* qaevent
-      precreate-core suggestion /opt/solr/server/solr/configsets/suggestion
-      cp -r /opt/solr/server/solr/configsets/suggestion/* suggestion
-      chown -R solr:solr /var/solr
-      runuser -u solr -- solr-foreground
+      - /bin/bash
+      - -c
+      - |
+        set -e
+        echo "Waiting for DB..."
+        until (</dev/tcp/dspacedb/5432) >/dev/null 2>&1; do sleep 1; done
+        echo "Running DB migrations..."
+        /dspace/bin/dspace database migrate
+        echo "Starting DSpace REST..."
+        java -jar /dspace/webapps/server-boot.jar --dspace.dir=/dspace
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${DSPACE_INTERNAL_PORT:-8080}${DSPACE_REST_NAMESPACE:-/server}/api/core/sites >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
 volumes:
   assetstore:
   pgdata:
   solr_data:
+
+networks:
+  dspacenet:
+    ipam:
+      config:
+        - subnet: ${DSPACENET_SUBNET:-172.23.0.0/16}

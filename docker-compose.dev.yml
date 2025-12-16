@@ -1,0 +1,81 @@
+services:
+  # DEV: backend "latest-test" + build + відкриті порти для хоста
+  dspace:
+    environment:
+      JAVA_OPTS: ${DSPACE_JAVA_OPTS:--Xmx2000m}
+    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace:${DSPACE_VER:-latest-test}"
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
+        DSPACE_VERSION: ${DSPACE_VER:-latest-test}
+        JDK_VERSION: ${JDK_VERSION:-17}
+    ports:
+      - "${DSPACE_REST_PORT:-8080}:8080"
+      - "${DSPACE_DEBUG_PORT:-8000}:8000"
+    stdin_open: true
+    tty: true
+
+  # DEV: відкритий Postgres (щоб підключатись psql/GUI з хоста)
+  dspacedb:
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    stdin_open: true
+    tty: true
+
+  # DEV: відкритий Solr (для діагностики)
+  dspacesolr:
+    ports:
+      - "${SOLR_PORT:-8983}:8983"
+    stdin_open: true
+    tty: true
+
+  # DEV: Angular dev-server + підключення UI config.yml
+  dspace-angular:
+    # (опційно) container_name — якщо хочеш фіксовані імена.
+    # Якщо плануєш мати кілька інстансів/проектів — краще прибрати.
+    container_name: dspace-angular
+    depends_on:
+      - dspace
+    networks:
+      - dspacenet
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${DSPACE_UI_PORT:-4000}/ 2>/dev/null | grep -q '<ds-app'"]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 90s
+
+    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace-angular:${DSPACE_UI_VER:-latest}"
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+    command: ["npm","run","serve","--","--host","0.0.0.0","--port","${DSPACE_UI_PORT:-4000}"]
+
+    ports:
+      - "${DSPACE_UI_PORT:-4000}:4000"
+      - "${DSPACE_UI_TEST_PORT:-9876}:9876"
+
+    stdin_open: false
+    tty: false
+
+    volumes:
+      - ./ui-config/config.yml:/app/config/config.yml:ro
+
+    environment:
+      DSPACE_UI_SSL: ${DSPACE_UI_SSL:-false}
+      DSPACE_UI_HOST: ${DSPACE_UI_HOST:-localhost}
+      DSPACE_UI_PORT: ${DSPACE_UI_PORT:-4000}
+      DSPACE_UI_NAMESPACE: ${DSPACE_UI_NAMESPACE:-/}
+      DSPACE_REST_SSL: ${DSPACE_REST_SSL:-false}
+      DSPACE_REST_HOST: ${DSPACE_REST_HOST:-localhost}
+      DSPACE_REST_PORT: ${DSPACE_REST_PORT:-8080}
+      DSPACE_REST_NAMESPACE: ${DSPACE_REST_NAMESPACE:-/server}
+      DSPACE_REST_SSRBASEURL: ${DSPACE_REST_SSRBASEURL:-http://dspace:8080/server}
+      CI: ${CI:-true}
+      FORCE_COLOR: ${FORCE_COLOR:-0}

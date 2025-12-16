@@ -1,0 +1,48 @@
+services:
+  dspace:
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    # Тимчасово можна лишити доступ тільки локально для адмін-діагностики:
+    # ports:
+    #   - "127.0.0.1:8080:8080"
+
+  dspacedb:
+    restart: unless-stopped
+
+  dspacesolr:
+    restart: unless-stopped
+
+  dspace-angular:
+    container_name: dspace-angular
+    hostname: dspace-angular
+    depends_on:
+      - dspace
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    # На проді dev-порт 9876 не потрібен. UI можна теж поки тримати лише локально:
+    # ports:
+    #   - "127.0.0.1:4000:4000"
+
+    environment:
+      # У проді ми будемо за reverse proxy, але поки залишаємо логіку REST всередині мережі
+      DSPACE_UI_SSL: 'false'
+      DSPACE_UI_HOST: localhost
+      DSPACE_UI_PORT: '4000'
+      DSPACE_UI_NAMESPACE: /
+
+      DSPACE_REST_SSL: 'false'
+      DSPACE_REST_HOST: dspace
+      DSPACE_REST_PORT: 8080
+      DSPACE_REST_NAMESPACE: /server
+
+      # Важливо для SSR/Node: контейнер має ходити в REST по внутрішній мережі
+      DSPACE_REST_SSRBASEURL: "http://dspace:8080/server"
