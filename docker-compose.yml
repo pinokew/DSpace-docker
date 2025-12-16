@@ -24,7 +24,7 @@ services:
   dspacesolr:
     container_name: dspacesolr
     
-    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace-solr:${DSPACE_SOLR_VER:-latest}"
+    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace-solr:${DSPACE_SOLR_VERSION:-latest}"
     build:
       context: ./dspace/src/main/docker/dspace-solr/
       additional_contexts:
