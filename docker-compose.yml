@@ -1,68 +1,51 @@
 services:
-  dspace:
-    container_name: dspace
-    environment:
-      dspace__P__dir: /dspace
-      dspace__P__name: 'DSpace Started with Docker Compose'
-      db__P__url: 'jdbc:postgresql://dspacedb:5432/dspace'
-      solr__P__server: http://dspacesolr:8983/solr
-      matomo__P__tracker__P__url: http://matomo
-      proxies__P__trusted__P__ipranges: '172.23.0'
-      LOGGING_CONFIG: /dspace/config/log4j2-container.xml
-    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace:${DSPACE_VER:-latest}"
-    depends_on:
-      - dspacedb
-      - dspacesolr
-    networks:
-      - dspacenet
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    volumes:
-      - assetstore:/dspace/assetstore
-      - ./dspace/config:/dspace/config
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        while (!</dev/tcp/dspacedb/5432) > /dev/null 2>&1; do sleep 1; done;
-        /dspace/bin/dspace database migrate
-        java -jar /dspace/webapps/server-boot.jar --dspace.dir=/dspace
-
   dspacedb:
     container_name: dspacedb
     image: "docker.io/postgres:${POSTGRES_VERSION:-15}"
     environment:
-      PGDATA: /pgdata
-      POSTGRES_DB: dspace
-      POSTGRES_USER: dspace
-      POSTGRES_PASSWORD: dspace
+      TZ: ${TZ:-Europe/Kyiv}
+      PGDATA: ${POSTGRES_PGDATA:-/pgdata}
+      POSTGRES_DB: ${POSTGRES_DB:-dspace}
+      POSTGRES_USER: ${POSTGRES_USER:-dspace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dspace}
     networks:
       - dspacenet
     volumes:
-      - pgdata:/pgdata
+      - pgdata:${POSTGRES_PGDATA:-/pgdata}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dspace} -d ${POSTGRES_DB:-dspace} -h 127.0.0.1 -p ${POSTGRES_INTERNAL_PORT:-5432}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   dspacesolr:
     container_name: dspacesolr
-    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace-solr:${DSPACE_VER:-latest}"
+    
+    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace-solr:${DSPACE_SOLR_VER:-latest}"
     build:
       context: ./dspace/src/main/docker/dspace-solr/
       additional_contexts:
         solrconfigs: ./dspace/solr/
       args:
-        SOLR_VERSION: "${SOLR_VER:-9.8}"
+        SOLR_VERSION: "${SOLR_VERSION:-9.8}"
+    environment:
+      TZ: ${TZ:-Europe/Kyiv}
     networks:
       - dspacenet
     working_dir: /var/solr/data
     volumes:
       - solr_data:/var/solr/data
+    ports:
+      - "${SOLR_PORT:-8983}:8983"
     user: root
     entrypoint:
       - /bin/bash
       - -c
       - |
+        set -e
         init-var-solr
         precreate-core authority /opt/solr/server/solr/configsets/authority
         cp -r /opt/solr/server/solr/configsets/authority/* authority
@@ -78,6 +61,77 @@ services:
         cp -r /opt/solr/server/solr/configsets/suggestion/* suggestion
         chown -R solr:solr /var/solr
         runuser -u solr -- solr-foreground
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${SOLR_INTERNAL_PORT:-8983}/solr/ >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+  dspace:
+    container_name: dspace
+    
+    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace:${DSPACE_REST_VER:-latest}"
+    environment:
+      TZ: ${TZ:-Europe/Kyiv}
+
+      # base dspace install dir
+      dspace__P__dir: ${DSPACE_DIR:-/dspace}
+
+      # human-readable instance name
+      dspace__P__name: ${DSPACE_NAME:-DSpace Started with Docker Compose}
+
+      # DB/Solr endpoints in docker network
+      db__P__url: "jdbc:postgresql://dspacedb:${POSTGRES_INTERNAL_PORT:-5432}/${POSTGRES_DB:-dspace}"
+      solr__P__server: "http://dspacesolr:${SOLR_INTERNAL_PORT:-8983}/solr"
+
+      # URL settings (важливо для логіну/redirect)
+      dspace__P__server__P__url: ${DSPACE_REST_BASEURL:-http://localhost:8080/server}
+      dspace__P__ui__P__url: ${DSPACE_UI_BASEURL:-http://localhost:4000/}
+
+      # Trusted proxy range must match subnet (перші 3 октети)
+      proxies__P__trusted__P__ipranges: ${PROXIES_TRUSTED_IPRANGES:-172.23.0}
+
+      LOGGING_CONFIG: ${DSPACE_LOGGING_CONFIG:-/dspace/config/log4j2-container.xml}
+
+      # (опційно) якщо Matomo не використовуєш — можеш прибрати
+      matomo__P__tracker__P__url: ${MATOMO_TRACKER_URL:-http://matomo}
+
+    depends_on:
+      dspacedb:
+        condition: service_healthy
+      dspacesolr:
+        condition: service_healthy
+    networks:
+      - dspacenet
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - assetstore:/dspace/assetstore
+      - ./dspace/config:/dspace/config
+    ports:
+      - "${DSPACE_REST_PORT:-8080}:8080"
+      - "${DSPACE_REST_DEBUG_PORT:-8000}:8000"
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+        echo "Waiting for DB..."
+        until (</dev/tcp/dspacedb/5432) >/dev/null 2>&1; do sleep 1; done
+        echo "Running DB migrations..."
+        /dspace/bin/dspace database migrate
+        echo "Starting DSpace REST..."
+        java -jar /dspace/webapps/server-boot.jar --dspace.dir=/dspace
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${DSPACE_INTERNAL_PORT:-8080}${DSPACE_REST_NAMESPACE:-/server}/api/core/sites >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
 
 volumes:
   assetstore:
@@ -88,4 +142,4 @@ networks:
   dspacenet:
     ipam:
       config:
-        - subnet: 172.23.0.0/16
+        - subnet: ${DSPACENET_SUBNET:-172.23.0.0/16}
