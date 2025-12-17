@@ -1,0 +1,70 @@
+# Production build for DSpace backend (REST)
+# Builds DSpace from source using dspace-dependencies image as build base
+
+ARG JDK_VERSION=17
+# IMPORTANT: use a tag that EXISTS for dspace/dspace-dependencies
+# Examples: dspace-9_x (rolling branch), or a specific release tag (if you use one)
+ARG DSPACE_VERSION=dspace-9_x
+ARG DOCKER_REGISTRY=docker.io
+
+# Step 1 - Maven build (uses dspace-dependencies image)
+FROM ${DOCKER_REGISTRY}/dspace/dspace-dependencies:${DSPACE_VERSION} AS build
+ARG TARGET_DIR=dspace-installer
+WORKDIR /app
+
+RUN mkdir /install \
+  && chown -Rv dspace: /install \
+  && chown -Rv dspace: /app
+
+USER dspace
+ADD --chown=dspace . /app/
+
+RUN mvn --no-transfer-progress package \
+  && mv /app/dspace/target/${TARGET_DIR}/* /install \
+  && mvn clean
+
+RUN rm -rf /install/webapps/server/
+
+# Step 2 - Ant deploy
+FROM docker.io/eclipse-temurin:${JDK_VERSION} AS ant_build
+ARG TARGET_DIR=dspace-installer
+COPY --from=build /install /dspace-src
+WORKDIR /dspace-src
+
+ENV ANT_VERSION=1.10.12
+ENV ANT_HOME=/tmp/ant-$ANT_VERSION
+ENV PATH=$ANT_HOME/bin:$PATH
+
+RUN mkdir $ANT_HOME \
+  && curl --silent --show-error --location --fail --retry 5 \
+     --output /tmp/apache-ant.tar.gz \
+     https://archive.apache.org/dist/ant/binaries/apache-ant-${ANT_VERSION}-bin.tar.gz \
+  && tar -zx --strip-components=1 -f /tmp/apache-ant.tar.gz -C $ANT_HOME \
+  && rm /tmp/apache-ant.tar.gz
+
+RUN ant init_installation update_configs update_code update_webapps
+
+# Step 3 - Runtime image
+FROM docker.io/eclipse-temurin:${JDK_VERSION}
+
+ENV DSPACE_INSTALL=/dspace
+COPY --from=ant_build /dspace $DSPACE_INSTALL
+WORKDIR $DSPACE_INSTALL
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends host \
+  && apt-get purge -y --auto-remove \
+  && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for runtime (optional but recommended)
+RUN groupadd -r dspace && useradd -r -g dspace dspace \
+  && chown -R dspace:dspace /dspace
+USER dspace
+
+# Prod: expose only REST port
+EXPOSE 8080
+
+# Default JVM memory (override via compose environment: JAVA_OPTS=...)
+ENV JAVA_OPTS=-Xmx2000m
+
+ENTRYPOINT ["java", "-jar", "webapps/server-boot.jar", "--dspace.dir=/dspace"]
