@@ -10,7 +10,7 @@ services:
         condition: service_healthy
     ports:
       - "${NGINX_HTTP_PORT:-8081}:80"
-      # HTTPS додамо пізніше (або Cloudflare в кінці)
+      # HTTPS пізніше
       # - "${NGINX_HTTPS_PORT:-8443}:443"
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
@@ -24,37 +24,42 @@ services:
       retries: 12
       start_period: 10s
 
-  # PROD: backend — НЕ latest-test, без build, без debug порту назовні
+  # PROD: backend — pull image, без build, без портів назовні
   dspace:
+    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace:${DSPACE_REST_VER:-dspace-9_x}"
     environment:
-      # перевизначаємо JAVA_OPTS з Dockerfile (якщо треба)
+      # override з Dockerfile (за потреби)
       JAVA_OPTS: "${DSPACE_JAVA_OPTS:--Xmx2000m}"
 
       # важливо для редіректів/логіну
       dspace__P__server__P__url: "${DSPACE_REST_BASEURL}"
       dspace__P__ui__P__url: "${DSPACE_UI_BASEURL}"
 
-    # у проді краще тягнути готовий образ (легше оновлювати)
-    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace:${DSPACE_REST_VER:-latest}"
-
-    # В PROD не публікуємо REST/DEBUG назовні (лише nginx)
-    ports: []
+    ports: []        # прибираємо публікацію 8080/8000 назовні
+    expose:
+      - "8080"
+      - "8000"
     stdin_open: false
     tty: false
 
-  # PROD: DB — не публікуємо назовні
+  # PROD: DB — без портів назовні
   dspacedb:
     ports: []
+    expose:
+      - "5432"
     stdin_open: false
     tty: false
 
-  # PROD: Solr — не публікуємо назовні
+  # PROD: Solr — pull image, без build, без портів назовні
   dspacesolr:
+    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace-solr:${DSPACE_SOLR_VER:-dspace-9_x}"
     ports: []
+    expose:
+      - "8983"
     stdin_open: false
     tty: false
 
-  # PROD: UI — НЕ ng serve, без публікації 4000 назовні (тільки nginx)
+  # PROD: UI — pull image, без ng serve, без портів назовні (лише через nginx)
   dspace-angular:
     container_name: dspace-angular
     depends_on:
@@ -63,7 +68,8 @@ services:
     networks:
       - dspacenet
 
-    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace-angular:${DSPACE_UI_VER:-latest}"
+    # Для “продового” UI частіше використовують *-dist теги (зазвичай це зібраний фронт)
+    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace-angular:${DSPACE_UI_VER:-dspace-9_x-dist}"
 
     logging:
       driver: "json-file"
@@ -71,17 +77,15 @@ services:
         max-size: "5m"
         max-file: "3"
 
-    # У PROD НЕ повинно бути command: npm run serve ...
-    # command: []  # не треба
-
-    # У PROD не публікуємо 4000/9876 назовні
     ports: []
+    expose:
+      - "4000"
 
     volumes:
       - ./ui-config/config.yml:/app/config/config.yml:ro
 
     environment:
-      # UI “публічна” адреса — це Nginx (PUBLIC_*)
+      # UI публічна адреса — це Nginx (PUBLIC_*)
       DSPACE_UI_SSL: "${PUBLIC_SSL:-false}"
       DSPACE_UI_HOST: "${PUBLIC_HOST}"
       DSPACE_UI_PORT: "${PUBLIC_PORT}"
@@ -100,7 +104,7 @@ services:
       FORCE_COLOR: "${FORCE_COLOR:-0}"
 
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4000/ 2>/dev/null | grep -q '<ds-app'"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4000/ >/dev/null 2>&1"]
       interval: 15s
       timeout: 5s
       retries: 40

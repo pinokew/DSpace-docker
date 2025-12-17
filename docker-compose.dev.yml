@@ -3,13 +3,13 @@ services:
   dspace:
     environment:
       JAVA_OPTS: ${DSPACE_JAVA_OPTS:--Xmx2000m}
-    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace:${DSPACE_VERSION:-latest-test}"
+    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace:${DSPACE_VERSION:-latest}"
     build:
       context: .
       dockerfile: Dockerfile.dev
       args:
         DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
-        DSPACE_VERSION: ${DSPACE_DEPS_VER:-latest}
+        DSPACE_VERSION: ${DSPACE_VERSION:-latest}
         JDK_VERSION: ${JDK_VERSION:-17}
     ports:
       - "${DSPACE_REST_PORT:-8080}:8080"
@@ -26,6 +26,12 @@ services:
 
   # DEV: відкритий Solr (для діагностики)
   dspacesolr:
+    build:
+      context: ./dspace/src/main/docker/dspace-solr/
+      additional_contexts:
+        solrconfigs: ./dspace/solr/
+      args:
+        SOLR_VERSION: "${SOLR_VERSION:-9.8}"
     ports:
       - "${SOLR_PORT:-8983}:8983"
     stdin_open: true
