@@ -1,11 +1,16 @@
 ui:
   ssl: false
-  host: localhost
-  port: 4000
+  host: 0.0.0.0      # <--- Правильно: Слухаємо всюди
+  port: 8081         # Порт, на якому висить Node.js
+  namespace: /
   nameSpace: /
   useProxies: false
+
 rest:
   ssl: false
-  host: localhost
-  port: 8080
+  host: localhost    # <--- ВИПРАВЛЕНО: Клієнт стукає сюди (через Nginx)
+  port: 8081         # Зовнішній порт Nginx
+  namespace: /server
   nameSpace: /server
+
+useProxies: false
