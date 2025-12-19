@@ -12,25 +12,16 @@ services:
       - dspacenet
     volumes:
       - pgdata:${POSTGRES_PGDATA:-/pgdata}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dspace} -d ${POSTGRES_DB:-dspace} -h 127.0.0.1 -p ${POSTGRES_INTERNAL_PORT:-5432}"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 20s
-
+    
   dspacesolr:
     container_name: dspacesolr
-    
     image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace-solr:${DSPACE_SOLR_VER:-latest}"
-    build:
-      context: ./dspace/src/main/docker/dspace-solr/
-      additional_contexts:
-        solrconfigs: ./dspace/solr/
-      args:
-        SOLR_VERSION: "${SOLR_VERSION:-9.8}"
     environment:
       TZ: ${TZ:-Europe/Kyiv}
     networks:
@@ -38,8 +29,6 @@ services:
     working_dir: /var/solr/data
     volumes:
       - solr_data:/var/solr/data
-    ports:
-      - "${SOLR_PORT:-8983}:8983"
     user: root
     entrypoint:
       - /bin/bash
@@ -92,7 +81,7 @@ services:
       # Trusted proxy range must match subnet (перші 3 октети)
       proxies__P__trusted__P__ipranges: ${PROXIES_TRUSTED_IPRANGES:-172.23.0}
 
-      LOGGING_CONFIG: ${DSPACE_LOGGING_CONFIG:-/dspace/config/log4j2-container.xml}
+      # LOGGING_CONFIG: ${DSPACE_LOGGING_CONFIG:-/dspace/config/log4j2-container.xml}
 
       # (опційно) якщо Matomo не використовуєш — можеш прибрати
       matomo__P__tracker__P__url: ${MATOMO_TRACKER_URL:-http://matomo}
@@ -111,10 +100,7 @@ services:
         max-file: "3"
     volumes:
       - assetstore:/dspace/assetstore
-      - ./dspace/config:/dspace/config
-    ports:
-      - "${DSPACE_REST_PORT:-8080}:8080"
-      - "${DSPACE_REST_DEBUG_PORT:-8000}:8000"
+      # - ./dspace/config:/dspace/config
     entrypoint:
       - /bin/bash
       - -c
