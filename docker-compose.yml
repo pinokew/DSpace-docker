@@ -11,7 +11,11 @@ services:
     networks:
       - dspacenet
     volumes:
-      - pgdata:${POSTGRES_PGDATA:-/pgdata}
+      # Дані бази
+      - ${VOL_POSTGRESQL_PATH:-./data/pgdata}:${POSTGRES_PGDATA:-/pgdata}
+      # Логи (опційно, якщо Postgres налаштовано писати в файл, зазвичай він пише в stdout)
+      # Але ми можемо мапити папку логів, якщо змінимо конфіг. 
+      # Поки що залишимо тільки дані, бо логи доступні через `docker logs` (json-file).
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dspace} -d ${POSTGRES_DB:-dspace} -h 127.0.0.1 -p ${POSTGRES_INTERNAL_PORT:-5432}"]
       interval: 10s
@@ -28,27 +32,36 @@ services:
       - dspacenet
     working_dir: /var/solr/data
     volumes:
-      - solr_data:/var/solr/data
+      # Індекси Solr
+      - ${VOL_SOLR_PATH:-./data/solr}:/var/solr/data
     user: root
+    # Складний entrypoint, який ініціалізує ядра ТІЛЬКИ якщо папка порожня
     entrypoint:
       - /bin/bash
       - -c
       - |
         set -e
-        init-var-solr
-        precreate-core authority /opt/solr/server/solr/configsets/authority
-        cp -r /opt/solr/server/solr/configsets/authority/* authority
-        precreate-core oai /opt/solr/server/solr/configsets/oai
-        cp -r /opt/solr/server/solr/configsets/oai/* oai
-        precreate-core search /opt/solr/server/solr/configsets/search
-        cp -r /opt/solr/server/solr/configsets/search/* search
-        precreate-core statistics /opt/solr/server/solr/configsets/statistics
-        cp -r /opt/solr/server/solr/configsets/statistics/* statistics
-        precreate-core qaevent /opt/solr/server/solr/configsets/qaevent
-        cp -r /opt/solr/server/solr/configsets/qaevent/* qaevent
-        precreate-core suggestion /opt/solr/server/solr/configsets/suggestion
-        cp -r /opt/solr/server/solr/configsets/suggestion/* suggestion
-        chown -R solr:solr /var/solr
+        # Перевіряємо, чи ініціалізовано Solr (чи є папка authority)
+        if [ ! -d "/var/solr/data/authority" ]; then
+            echo "Initializing Solr cores..."
+            init-var-solr
+            precreate-core authority /opt/solr/server/solr/configsets/authority
+            cp -r /opt/solr/server/solr/configsets/authority/* authority
+            precreate-core oai /opt/solr/server/solr/configsets/oai
+            cp -r /opt/solr/server/solr/configsets/oai/* oai
+            precreate-core search /opt/solr/server/solr/configsets/search
+            cp -r /opt/solr/server/solr/configsets/search/* search
+            precreate-core statistics /opt/solr/server/solr/configsets/statistics
+            cp -r /opt/solr/server/solr/configsets/statistics/* statistics
+            precreate-core qaevent /opt/solr/server/solr/configsets/qaevent
+            cp -r /opt/solr/server/solr/configsets/qaevent/* qaevent
+            precreate-core suggestion /opt/solr/server/solr/configsets/suggestion
+            cp -r /opt/solr/server/solr/configsets/suggestion/* suggestion
+            chown -R solr:solr /var/solr
+        else
+            echo "Solr cores already initialized."
+            chown -R solr:solr /var/solr
+        fi
         runuser -u solr -- solr-foreground
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${SOLR_INTERNAL_PORT:-8983}/solr/ >/dev/null 2>&1"]
@@ -58,34 +71,18 @@ services:
       start_period: 30s
 
   dspace:
-    container_name: dspace
-    
+    container_name: ${DSPACE_CONTAINER_NAME:-dspace}
     image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace:${DSPACE_REST_VER:-latest}"
     environment:
       TZ: ${TZ:-Europe/Kyiv}
-
-      # base dspace install dir
       dspace__P__dir: ${DSPACE_DIR:-/dspace}
-
-      # human-readable instance name
       dspace__P__name: ${DSPACE_NAME:-DSpace Started with Docker Compose}
-
-      # DB/Solr endpoints in docker network
       db__P__url: "jdbc:postgresql://dspacedb:${POSTGRES_INTERNAL_PORT:-5432}/${POSTGRES_DB:-dspace}"
       solr__P__server: "http://dspacesolr:${SOLR_INTERNAL_PORT:-8983}/solr"
-
-      # URL settings (важливо для логіну/redirect)
       dspace__P__server__P__url: ${DSPACE_REST_BASEURL:-http://localhost:8080/server}
       dspace__P__ui__P__url: ${DSPACE_UI_BASEURL:-http://localhost:4000/}
-
-      # Trusted proxy range must match subnet (перші 3 октети)
       proxies__P__trusted__P__ipranges: ${PROXIES_TRUSTED_IPRANGES:-172.23.0}
-
-      # LOGGING_CONFIG: ${DSPACE_LOGGING_CONFIG:-/dspace/config/log4j2-container.xml}
-
-      # (опційно) якщо Matomo не використовуєш — можеш прибрати
       matomo__P__tracker__P__url: ${MATOMO_TRACKER_URL:-http://matomo}
-
     depends_on:
       dspacedb:
         condition: service_healthy
@@ -99,8 +96,13 @@ services:
         max-size: "10m"
         max-file: "3"
     volumes:
-      - assetstore:/dspace/assetstore
-      # - ./dspace/config:/dspace/config
+      # Основне сховище файлів (Assetstore)
+      - ${VOL_ASSETSTORE_PATH:-./data/assetstore}:/dspace/assetstore
+      # Папка для експорту (AIP, CSV тощо)
+      - ${VOL_EXPORTS_PATH:-./data/exports}:/dspace/exports
+      # Загальна папка логів (якщо DSpace налаштовано писати в файл)
+      # Зазвичай DSpace пише логи в /dspace/log/*.log
+      - ${VOL_LOGS_PATH:-./data/logs}:/dspace/log
     entrypoint:
       - /bin/bash
       - -c
@@ -111,18 +113,14 @@ services:
         echo "Running DB migrations..."
         /dspace/bin/dspace database migrate
         echo "Starting DSpace REST..."
-        java -jar /dspace/webapps/server-boot.jar --dspace.dir=/dspace
+        # ВИПРАВЛЕНО: Додано $JAVA_OPTS перед -jar
+        java $JAVA_OPTS -jar /dspace/webapps/server-boot.jar --dspace.dir=/dspace
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${DSPACE_INTERNAL_PORT:-8080}${DSPACE_REST_NAMESPACE:-/server}/api/core/sites >/dev/null 2>&1"]
       interval: 15s
       timeout: 5s
       retries: 20
       start_period: 60s
-
-volumes:
-  assetstore:
-  pgdata:
-  solr_data:
 
 networks:
   dspacenet:

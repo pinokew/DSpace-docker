@@ -54,4 +54,4 @@ docker exec "${DSPACE_CONTAINER_NAME}" bash -lc \
     -p '${PASS}' \
     -c '${LOCALE}'"
 
-info "Done. Try login in UI: http://<host>:4000/login"
+info "Done. Try login in"

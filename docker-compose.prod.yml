@@ -5,7 +5,7 @@ services:
     image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace:${DSPACE_REST_VER:-dspace-9_x}"
     container_name: dspace
     environment:
-      JAVA_OPTS: "${DSPACE_JAVA_OPTS:--Xmx2000m}"
+      JAVA_OPTS: "${JAVA_OPTS:--Xmx2000m -Djava.security.egd=file:/dev/./urandom}"
       # Backend має знати свої ПУБЛІЧНІ адреси (через які користувач заходить)
       dspace__P__server__P__url: "${DSPACE_REST_BASEURL}"
       dspace__P__ui__P__url: "${DSPACE_UI_BASEURL}"
