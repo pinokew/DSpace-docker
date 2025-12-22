@@ -1,11 +1,7 @@
 services:
-  # ===================================================
-  # DATABASE (PostgreSQL)
-  # ===================================================
   dspacedb:
     container_name: dspacedb
     image: "docker.io/postgres:${POSTGRES_VERSION:-15}"
-    restart: unless-stopped
     environment:
       TZ: ${TZ:-Europe/Kyiv}
       PGDATA: ${POSTGRES_PGDATA:-/pgdata}
@@ -15,36 +11,42 @@ services:
     networks:
       - dspacenet
     volumes:
+      # Дані бази
       - ${VOL_POSTGRESQL_PATH:-./data/pgdata}:${POSTGRES_PGDATA:-/pgdata}
+      # Логи (опційно, якщо Postgres налаштовано писати в файл, зазвичай він пише в stdout)
+      # Але ми можемо мапити папку логів, якщо змінимо конфіг. 
+      # Поки що залишимо тільки дані, бо логи доступні через `docker logs` (json-file).      
+     
+      # DEFAULT
+      # - pgdata:${POSTGRES_PGDATA:-/pgdata}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dspace} -d ${POSTGRES_DB:-dspace} -h 127.0.0.1 -p ${POSTGRES_INTERNAL_PORT:-5432}"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 20s
-
-  # ===================================================
-  # SEARCH ENGINE (Solr)
-  # ===================================================
+    
   dspacesolr:
     container_name: dspacesolr
-    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace-solr:${DSPACE_SOLR_VER:-dspace-9_x}"
-    restart: unless-stopped
+    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace-solr:${DSPACE_SOLR_VER:-latest}"
     environment:
       TZ: ${TZ:-Europe/Kyiv}
-      SOLR_OPTS: "-Dsolr.config.lib.enabled=true"
     networks:
       - dspacenet
     working_dir: /var/solr/data
     volumes:
+      # Індекси Solr
       - ${VOL_SOLR_PATH:-./data/solr}:/var/solr/data
+      # Default
+      #   - solr_data:/var/solr/data
     user: root
-    # Ініціалізація ядер, якщо папка порожня
+    # Складний entrypoint, який ініціалізує ядра ТІЛЬКИ якщо папка порожня
     entrypoint:
       - /bin/bash
       - -c
       - |
         set -e
+        # Перевіряємо, чи ініціалізовано Solr (чи є папка authority)
         if [ ! -d "/var/solr/data/authority" ]; then
             echo "Initializing Solr cores..."
             init-var-solr
@@ -73,27 +75,19 @@ services:
       retries: 18
       start_period: 30s
 
-  # ===================================================
-  # BACKEND (REST API)
-  # ===================================================
   dspace:
-    container_name: dspace
-    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace:${DSPACE_REST_VER:-dspace-9_x}"
-    restart: unless-stopped
+    container_name: ${DSPACE_CONTAINER_NAME:-dspace}
+    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace:${DSPACE_REST_VER:-latest}"
     environment:
       TZ: ${TZ:-Europe/Kyiv}
-      JAVA_OPTS: "${DSPACE_JAVA_OPTS:--Xmx2000m -Djava.security.egd=file:/dev/./urandom}"
-      # Внутрішні налаштування
       dspace__P__dir: ${DSPACE_DIR:-/dspace}
-      dspace__P__name: ${DSPACE_NAME:-KDV Library Repository}
+      dspace__P__name: ${DSPACE_NAME:-DSpace Started with Docker Compose}
       db__P__url: "jdbc:postgresql://dspacedb:${POSTGRES_INTERNAL_PORT:-5432}/${POSTGRES_DB:-dspace}"
       solr__P__server: "http://dspacesolr:${SOLR_INTERNAL_PORT:-8983}/solr"
-      # Публічні URL (для користувача)
-      dspace__P__server__P__url: ${DSPACE_REST_BASEURL:-http://localhost:8081/server}
-      dspace__P__ui__P__url: ${DSPACE_UI_BASEURL:-http://localhost:8081}
-      # CORS та Proxy
-      proxies__P__trusted__P__ipranges: ${PROXIES_TRUSTED_IPRANGES:-0.0.0.0/0}
-      rest__P__cors__P__allowed__D__origins: ${DSPACE_UI_BASEURL:-http://localhost:8081}
+      dspace__P__server__P__url: ${DSPACE_REST_BASEURL:-http://localhost:8080/server}
+      dspace__P__ui__P__url: ${DSPACE_UI_BASEURL:-http://localhost:4000/}
+      proxies__P__trusted__P__ipranges: ${PROXIES_TRUSTED_IPRANGES:-172.23.0}
+      matomo__P__tracker__P__url: ${MATOMO_TRACKER_URL:-http://matomo}
     depends_on:
       dspacedb:
         condition: service_healthy
@@ -101,17 +95,24 @@ services:
         condition: service_healthy
     networks:
       - dspacenet
-    expose:
-      - "8080" # Тільки для внутрішньої мережі, Nginx проксує сюди
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
     volumes:
+      # Основне сховище файлів (Assetstore)
       - ${VOL_ASSETSTORE_PATH:-./data/assetstore}:/dspace/assetstore
+      # # Папка для експорту (AIP, CSV тощо)
       - ${VOL_EXPORTS_PATH:-./data/exports}:/dspace/exports
+      # # Загальна папка логів (якщо DSpace налаштовано писати в файл)
+      # # Зазвичай DSpace пише логи в /dspace/log/*.log
+      - ${VOL_LOGS_PATH:-./data/logs}:/dspace/log
+      # Монтування файлу local.cfg
       - ./dspace/config/local.cfg:/dspace/config/local.cfg
+
+      # DEFAULT
+      # - assetstore:/dspace/assetstore
     entrypoint:
       - /bin/bash
       - -c
@@ -122,6 +123,7 @@ services:
         echo "Running DB migrations..."
         /dspace/bin/dspace database migrate
         echo "Starting DSpace REST..."
+        # ВИПРАВЛЕНО: Додано $JAVA_OPTS перед -jar
         java $JAVA_OPTS -jar /dspace/webapps/server-boot.jar --dspace.dir=/dspace
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${DSPACE_INTERNAL_PORT:-8080}${DSPACE_REST_NAMESPACE:-/server}/api/core/sites >/dev/null 2>&1"]
@@ -130,69 +132,13 @@ services:
       retries: 20
       start_period: 60s
 
-  # ===================================================
-  # FRONTEND (Angular) + NGINX Sidecar
-  # ===================================================
-  dspace-angular:
-    container_name: dspace-angular
-    image: "${DOCKER_REGISTRY:-docker.io}/${DOCKER_OWNER:-dspace}/dspace-angular:${DSPACE_UI_VER:-dspace-9_x-dist}"
-    restart: unless-stopped
-    depends_on:
-      dspace:
-        condition: service_healthy
-    networks:
-      - dspacenet
-    # Цей порт мапиться на HOST:8081, але трафік приймає Nginx (порт 80 всередині контейнера)
-    ports:
-      - "${NGINX_HTTP_PORT:-8081}:80"
-    volumes:
-      - ./ui-config/config.yml:/app/config/config.yml:ro
-    environment:
-      # Важливо: SSR всередині має ходити напряму до бекенду
-      DSPACE_REST_SSRBASEURL: ${DSPACE_REST_SSRBASEURL:-http://dspace:8080/server}
-      # Явно задаємо базові URL, щоб перекрити можливі помилки в config.yml
-      DSPACE_UI_BASEURL: ${DSPACE_UI_BASEURL:-http://localhost:8081}
-      DSPACE_REST_BASEURL: ${DSPACE_REST_BASEURL:-http://localhost:8081/server}
-      DSPACE_UI_HOST: ${DSPACE_UI_HOST:-0.0.0.0}
-      DSPACE_UI_PORT: ${DSPACE_UI_PORT:-8081}
-      DSPACE_UI_SSL: ${DSPACE_UI_SSL:-false}
-      # Логи
-      CI: "true"
-      FORCE_COLOR: "0"
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${DSPACE_UI_PORT:-8081}/ >/dev/null 2>&1"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
-      start_period: 30s
-
-  # Nginx (Sidecar) - працює в мережевому просторі Angular контейнера
-  nginx:
-    image: nginx:1.27-alpine
-    container_name: dspace-nginx
-    restart: unless-stopped
-    depends_on:
-      dspace-angular:
-        condition: service_healthy
-    network_mode: "service:dspace-angular"
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/ >/dev/null 2>&1"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
+# volumes:
+#   assetstore:
+#   pgdata:
+#   solr_data:
 
 networks:
   dspacenet:
-    name: dspacenet
-    driver: bridge
     ipam:
       config:
         - subnet: ${DSPACENET_SUBNET:-172.23.0.0/16}
