@@ -8,3 +8,8 @@
 *.log
 logs/
 **/logs/
+
+# Конфіги
+dspace/config/local.cfg
+ui-config/config.yml
+nginx/conf.d/dspace.conf
