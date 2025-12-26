@@ -117,5 +117,10 @@ echo "🔒 Setting permissions..."
 # sudo chown 1000:1000 "$TARGET_FILE" 2>/dev/null || true
 chmod 644 "$TARGET_FILE"
 
+# --- 8. BROWSER VIEW (INLINE) ---
+# Дозволяємо відкривати файли у браузері, якщо вони менші за 8 ГБ.
+# За замовчуванням DSpace ставить ліміт дуже низьким, тому все скачується.
+set_config "webui.content_disposition_threshold" "8589934592"
+
 echo "✅ Patching complete!"
 echo "👉 Configuration generated for: ${DSPACE_UI_BASEURL}"

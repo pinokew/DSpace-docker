@@ -112,6 +112,7 @@ services:
       - ${VOL_ASSETSTORE_PATH:-./data/assetstore}:/dspace/assetstore
       - ${VOL_EXPORTS_PATH:-./data/exports}:/dspace/exports
       - ./dspace/config/local.cfg:/dspace/config/local.cfg
+      - ./dspace/config/submission-forms.xml:/dspace/config/submission-forms.xml 
     entrypoint:
       - /bin/bash
       - -c
