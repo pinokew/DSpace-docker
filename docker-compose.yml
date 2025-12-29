@@ -200,7 +200,9 @@ services:
       - TUNNEL_TOKEN=${TUNNEL_TOKEN}
     networks:
       - dspacenet
-
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      
 networks:
   dspacenet:
     name: dspacenet
