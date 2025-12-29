@@ -35,7 +35,7 @@ UPSTREAM_API="http://${DSPACE_CONTAINER_NAME:-dspace}:${DSPACE_INTERNAL_PORT:-80
 cat <<EOF > "$TARGET_FILE"
 server {
     listen 80;
-    server_name localhost;
+    server_name _ ;
 
     client_max_body_size 512M;
     large_client_header_buffers 4 32k;
