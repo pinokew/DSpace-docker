@@ -16,25 +16,32 @@ fi
 TARGET_FILE="$SCRIPT_DIR/../nginx/conf.d/dspace.conf"
 mkdir -p "$(dirname "$TARGET_FILE")"
 
-echo "🔧 Patching Nginx..."
+echo "🔧 Patching Nginx (SIDECAR MODE for Ngrok)..."
 
-# INTELLIGENT PROTOCOL DETECTION
-PROTO_HEADER="http"
-PORT_HEADER="80"
+# --- CONFIGURATION ---
+# УВАГА: Оскільки network_mode: service:dspace-angular,
+# Nginx бачить Angular ТІЛЬКИ на localhost!
+UPSTREAM_UI_HOST="127.0.0.1"
+UPSTREAM_UI_PORT="8081"
 
-# Якщо в URL є https АБО ми сказали, що SSL увімкнено
-if [[ "$DSPACE_UI_BASEURL" == https* ]] || [ "${PUBLIC_SSL:-false}" = "true" ]; then
-    echo "🔒 HTTPS Detected. Configuring secure headers."
-    PROTO_HEADER="https"
-    PORT_HEADER="443"
-else
-    echo "🔓 HTTP Detected."
-fi
+# Бекенд знаходиться в іншому контейнері
+UPSTREAM_API_HOST="${DSPACE_CONTAINER_NAME:-dspace}"
+UPSTREAM_API_PORT="8080"
 
-UPSTREAM_UI="http://127.0.0.1:${DSPACE_UI_PORT:-8081}"
-UPSTREAM_API="http://${DSPACE_CONTAINER_NAME:-dspace}:${DSPACE_INTERNAL_PORT:-8080}${DSPACE_REST_NAMESPACE:-/server}"
+# Для Ngrok ми завжди вважаємо, що це HTTPS (він термінує SSL)
+PROTO_HEADER="https"
+PORT_HEADER="443"
 
 cat <<EOF > "$TARGET_FILE"
+# --- UPSTREAMS ---
+upstream dspace_ui_upstream {
+    server ${UPSTREAM_UI_HOST}:${UPSTREAM_UI_PORT};
+}
+
+upstream dspace_api_upstream {
+    server ${UPSTREAM_API_HOST}:${UPSTREAM_API_PORT};
+}
+
 server {
     listen 80;
     server_name _ ;
@@ -42,16 +49,18 @@ server {
     client_max_body_size 512M;
     large_client_header_buffers 4 32k;
     
-    # Оптимізація буферів
-    proxy_buffer_size 128k;
-    proxy_buffers 4 256k;
-    proxy_busy_buffers_size 256k;
+    proxy_connect_timeout 300s;
+    proxy_send_timeout 300s;
+    proxy_read_timeout 300s;
+    
+    # Ngrok любить прості з'єднання
+    proxy_http_version 1.1;
+    proxy_set_header Connection "close";
 
     location / {
-        proxy_pass ${UPSTREAM_UI};
-        proxy_http_version 1.1;
+        proxy_pass http://dspace_ui_upstream;
+        
         proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection 'upgrade';
         proxy_set_header Host \$http_host;
         proxy_cache_bypass \$http_upgrade;
         
@@ -59,30 +68,26 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Host \$http_host;
         
-        # CRITICAL FOR CLOUDFLARE & DSPACE 7
+        # Force HTTPS for Ngrok
         proxy_set_header X-Forwarded-Proto ${PROTO_HEADER};
         proxy_set_header X-Forwarded-Port ${PORT_HEADER};
     }
 
     location ${DSPACE_REST_NAMESPACE:-/server} {
-        proxy_pass ${UPSTREAM_API};
+        proxy_pass http://dspace_api_upstream${DSPACE_REST_NAMESPACE:-/server};
         
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Host \$http_host;
         
-        # CRITICAL FOR CLOUDFLARE & DSPACE 7
+        # Force HTTPS for Ngrok
         proxy_set_header X-Forwarded-Proto ${PROTO_HEADER};
         proxy_set_header X-Forwarded-Port ${PORT_HEADER};
         
-        # Виправлення для куків
         proxy_cookie_path ${DSPACE_REST_NAMESPACE:-/server} /;
-        
-        proxy_read_timeout 300s;
-        proxy_connect_timeout 300s;
     }
 }
 EOF
 
-echo "✅ Nginx configured."
+echo "✅ Nginx configured for Sidecar + Ngrok"

@@ -5,13 +5,13 @@ ui:
   port: 8081
   nameSpace: /
   # Публічний URL для генерації посилань
-  baseUrl: https://repo.fby.com.ua
+  baseUrl: https://untaking-amusively-staci.ngrok-free.dev
   useProxies: true
 
 rest:
   # Налаштування для БРАУЗЕРА (куди стукати за даними)
   ssl: true
-  host: repo.fby.com.ua
+  host: untaking-amusively-staci.ngrok-free.dev
   port: 443
   nameSpace: /server
   ssrBaseUrl: http://dspace:8080/server
