@@ -190,19 +190,33 @@ services:
       retries: 5
       start_period: 10s
 
-  # Cloudflare Tunnel
-  tunnel:
-    image: cloudflare/cloudflared:latest
-    container_name: dspace-tunnel
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: dspace-ngrok
     restart: unless-stopped
-    command: tunnel run --protocol http2
+    command: http --domain=untaking-amusively-staci.ngrok-free.dev dspace-angular:80
     environment:
-      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    ports:
+      - "4040:4040" # Веб-інтерфейс Ngrok для моніторингу запитів
     networks:
       - dspacenet
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-      
+    depends_on:
+      - nginx
+
+  # Cloudflare Tunnel
+  # tunnel:
+  #   image: cloudflare/cloudflared:latest
+  #   container_name: dspace-tunnel
+  #   restart: unless-stopped
+  #   command: tunnel --protocol http2 --loglevel debug run
+  #   environment:
+  #     - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+  #   networks:
+  #     - dspacenet
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+    
 networks:
   dspacenet:
     name: dspacenet
