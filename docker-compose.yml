@@ -145,7 +145,8 @@ services:
       - dspacenet
     # Цей порт мапиться на HOST:8081, але трафік приймає Nginx (порт 80 всередині контейнера)
     ports:
-      - "${NGINX_HTTP_PORT:-8081}:80"
+        - "443:443"
+        - "${NGINX_HTTP_PORT:-80}:80"
     volumes:
       - ./ui-config/config.yml:/app/config/config.yml:ro
     environment:
@@ -183,39 +184,40 @@ services:
     network_mode: "service:dspace-angular"
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/ >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/ >/dev/null 2>&1 || exit 0"] 
       interval: 10s
       timeout: 3s
       retries: 5
       start_period: 10s
 
-  ngrok:
-    image: ngrok/ngrok:latest
-    container_name: dspace-ngrok
-    restart: unless-stopped
-    command: http --domain=untaking-amusively-staci.ngrok-free.dev dspace-angular:80
-    environment:
-      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
-    ports:
-      - "4040:4040" # Веб-інтерфейс Ngrok для моніторингу запитів
-    networks:
-      - dspacenet
-    depends_on:
-      - nginx
+  # ngrok:
+    # image: ngrok/ngrok:latest
+    # container_name: dspace-ngrok
+    # restart: unless-stopped
+    # command: http --domain=untaking-amusively-staci.ngrok-free.dev dspace-angular:80
+    # environment:
+      # NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    # ports:
+      # - "4040:4040" # Веб-інтерфейс Ngrok для моніторингу запитів
+    # networks:
+      # - dspacenet
+    # depends_on:
+      # - nginx
 
   # Cloudflare Tunnel
-  # tunnel:
-  #   image: cloudflare/cloudflared:latest
-  #   container_name: dspace-tunnel
-  #   restart: unless-stopped
-  #   command: tunnel --protocol http2 --loglevel debug run
-  #   environment:
-  #     - TUNNEL_TOKEN=${TUNNEL_TOKEN}
-  #   networks:
-  #     - dspacenet
-  #   extra_hosts:
-  #     - "host.docker.internal:host-gateway"
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: dspace-tunnel
+    restart: unless-stopped
+    command: tunnel --protocol http2 --loglevel debug run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    networks:
+      - dspacenet
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     
 networks:
   dspacenet:

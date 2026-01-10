@@ -75,7 +75,7 @@ rest:
   host: ${REST_HOST}
   port: ${REST_PORT}
   nameSpace: ${REST_NAMESPACE}
-  ssrBaseUrl: http://dspace:8080/server
+  ssrBaseUrl: ${DSPACE_REST_SSRBASEURL}
 
 themes:
   - name: dspace
