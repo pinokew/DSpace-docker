@@ -1,9 +1,10 @@
+version: '3.7'
+
 services:
   # ===================================================
   # TRAEFIK (Reverse Proxy)
   # ===================================================
   traefik:
-    # ОНОВЛЕНО: v3.6.1+ містить виправлення для Docker API 1.44
     image: traefik:v3.6
     container_name: dspace-traefik
     restart: unless-stopped
@@ -14,7 +15,8 @@ services:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
-    # Прибираємо непрацюючі змінні середовища, новий Traefik сам домовиться з Docker
+      # КРИТИЧНО для Cloudflare Tunnel:
+      - "--entrypoints.web.forwardedHeaders.insecure=true" 
     ports:
       - "8080:80"
       - "8088:8080"
@@ -116,10 +118,15 @@ services:
       dspace__P__name: ${DSPACE_NAME:-KDV Library Repository}
       db__P__url: "jdbc:postgresql://dspacedb:${POSTGRES_INTERNAL_PORT:-5432}/${POSTGRES_DB:-dspace}"
       solr__P__server: "http://dspacesolr:${SOLR_INTERNAL_PORT:-8983}/solr"
+      
+      # === ВИКОРИСТАННЯ ЗМІННИХ (NO HARDCODE) ===
       dspace__P__server__P__url: ${DSPACE_REST_BASEURL:-http://localhost:8081/server}
       dspace__P__ui__P__url: ${DSPACE_UI_BASEURL:-http://localhost:8081}
-      proxies__P__trusted__P__ipranges: ${PROXIES_TRUSTED_IPRANGES:-0.0.0.0/0}
+      
+      # === CORS (Беремо зі змінної UI URL) ===
       rest__P__cors__P__allowed__D__origins: ${DSPACE_UI_BASEURL:-http://localhost:8081}
+      
+      proxies__P__trusted__P__ipranges: ${PROXIES_TRUSTED_IPRANGES:-0.0.0.0/0}
     depends_on:
       dspacedb:
         condition: service_healthy
@@ -156,14 +163,13 @@ services:
       timeout: 5s
       retries: 20
       start_period: 60s
-    
+     
     # --- TRAEFIK CONFIGURATION FOR BACKEND ---
     labels:
       - "traefik.enable=true"
-      # Правило: Якщо запит на repo.fby.com.ua І шлях починається з /server
-      - "traefik.http.routers.dspace-api.rule=Host(`repo.fby.com.ua`) && PathPrefix(`/server`)"
+      # Використовуємо змінну DSPACE_HOSTNAME
+      - "traefik.http.routers.dspace-api.rule=Host(`${DSPACE_HOSTNAME}`) && PathPrefix(`/server`)"
       - "traefik.http.routers.dspace-api.entrypoints=web"
-      # Направляємо на порт 8080 (внутрішній порт Tomcat)
       - "traefik.http.services.dspace-api.loadbalancer.server.port=8080"
 
   # ===================================================
@@ -183,14 +189,17 @@ services:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     environment:
-      DSPACE_REST_SSRBASEURL: ${DSPACE_REST_SSRBASEURL:-http://dspace:8080/server}
+      # Внутрішнє звернення контейнера Angular до API (залишаємо http і ім'я сервісу, бо це внутрішня мережа Docker)
+      DSPACE_REST_SSRBASEURL: http://dspace:8080/server
+      
+      # === ВИКОРИСТАННЯ ЗМІННИХ (NO HARDCODE) ===
       DSPACE_UI_BASEURL: ${DSPACE_UI_BASEURL:-http://localhost:8081}
       DSPACE_REST_BASEURL: ${DSPACE_REST_BASEURL:-http://localhost:8081/server}
-      DSPACE_UI_HOST: ${DSPACE_UI_HOST:-0.0.0.0}
-      DSPACE_UI_PORT: ${DSPACE_UI_PORT:-8081}
+      
+      # Налаштування сервера Node.js
+      DSPACE_UI_HOST: 0.0.0.0
+      DSPACE_UI_PORT: 8081
       DSPACE_UI_SSL: "false"
-      CI: "true"
-      FORCE_COLOR: "0"
     logging:
       driver: "json-file"
       options:
@@ -202,17 +211,28 @@ services:
       timeout: 3s
       retries: 10
       start_period: 60s
-
-    # --- TRAEFIK CONFIGURATION FOR FRONTEND ---
     labels:
       - "traefik.enable=true"
-      # Правило: Всі інші запити на repo.fby.com.ua йдуть сюди
-      - "traefik.http.routers.dspace-ui.rule=Host(`repo.fby.com.ua`)"
+      # Використовуємо змінну DSPACE_HOSTNAME
+      - "traefik.http.routers.dspace-ui.rule=Host(`${DSPACE_HOSTNAME}`)"
       - "traefik.http.routers.dspace-ui.entrypoints=web"
-      # Направляємо на порт 8081 (внутрішній порт Angular)
       - "traefik.http.services.dspace-ui.loadbalancer.server.port=8081"
+      - "traefik.http.services.dspace-ui.loadbalancer.passhostheader=true"
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: dspace-tunnel
+    restart: always
+    networks:
+      - dspacenet
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    command: tunnel run
+    depends_on:
+      - traefik
 
 networks:
+  dspacedb-net: # Залишив сумісність
   dspacenet:
     name: dspacenet
     driver: bridge
