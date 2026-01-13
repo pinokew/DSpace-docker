@@ -93,7 +93,7 @@ themes:
       - tagName: link
         attributes:
           rel: manifest
-          href: assets/dspace/images/favicons/manifest.webmanifest
+          href: /assets/dspace/images/favicons/manifest.webmanifest
 EOF
 
 echo "✅ Frontend configured."

@@ -1,5 +1,3 @@
-version: '3.7'
-
 services:
   # ===================================================
   # TRAEFIK (Reverse Proxy)
@@ -166,11 +164,12 @@ services:
      
     # --- TRAEFIK CONFIGURATION FOR BACKEND ---
     labels:
-      - "traefik.enable=true"
-      # Використовуємо змінну DSPACE_HOSTNAME
-      - "traefik.http.routers.dspace-api.rule=Host(`${DSPACE_HOSTNAME}`) && PathPrefix(`/server`)"
-      - "traefik.http.routers.dspace-api.entrypoints=web"
-      - "traefik.http.services.dspace-api.loadbalancer.server.port=8080"
+    - "traefik.enable=true"
+    - "traefik.http.routers.dspace-api.rule=Host(`${DSPACE_HOSTNAME}`) && PathPrefix(`/server`)"
+    - "traefik.http.routers.dspace-api.entrypoints=web"
+    - "traefik.http.routers.dspace-api.priority=100"
+    - "traefik.http.services.dspace-api.loadbalancer.server.port=8080"
+
 
   # ===================================================
   # FRONTEND (Angular)
@@ -212,12 +211,12 @@ services:
       retries: 10
       start_period: 60s
     labels:
-      - "traefik.enable=true"
-      # Використовуємо змінну DSPACE_HOSTNAME
-      - "traefik.http.routers.dspace-ui.rule=Host(`${DSPACE_HOSTNAME}`)"
-      - "traefik.http.routers.dspace-ui.entrypoints=web"
-      - "traefik.http.services.dspace-ui.loadbalancer.server.port=8081"
-      - "traefik.http.services.dspace-ui.loadbalancer.passhostheader=true"
+    - "traefik.enable=true"
+    - "traefik.http.routers.dspace-ui.rule=Host(`${DSPACE_HOSTNAME}`)"
+    - "traefik.http.routers.dspace-ui.entrypoints=web"
+    - "traefik.http.routers.dspace-ui.priority=10"
+    - "traefik.http.services.dspace-ui.loadbalancer.server.port=8081"
+    - "traefik.http.services.dspace-ui.loadbalancer.passhostheader=true"
 
   tunnel:
     image: cloudflare/cloudflared:latest

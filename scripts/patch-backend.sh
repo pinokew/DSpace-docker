@@ -80,7 +80,7 @@ set_config "proxies.trusted.ipranges" "0.0.0.0/0" "$TARGET_FILE"
 
 # --- 7. CORS (MAXIMUM PERMISSION) ---
 # Додаємо і HTTP і HTTPS варіанти, щоб точно пустило
-set_config "rest.cors.allowed-origins" "\${dspace.ui.url}, http://localhost:8081, http://dspace-angular:80, https://repo.fby.com.ua, http://repo.fby.com.ua" "$TARGET_FILE"
+set_config "rest.cors.allowed-origins" "${DSPACE_UI_BASEURL}, http://localhost:8081, http://dspace-angular:80" "$TARGET_FILE"
 
 # --- 8. UPLOAD ---
 set_config "spring.servlet.multipart.max-file-size" "512MB" "$TARGET_FILE"
