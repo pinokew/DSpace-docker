@@ -124,7 +124,7 @@ services:
       # === CORS (Беремо зі змінної UI URL) ===
       rest__P__cors__P__allowed__D__origins: ${DSPACE_UI_BASEURL:-http://localhost:8081}
       
-      proxies__P__trusted__P__ipranges: ${PROXIES_TRUSTED_IPRANGES:-0.0.0.0/0}
+      proxies__P__trusted__P__ipranges: ${DSPACENET_SUBNET:-172.23.0.0/16}
     depends_on:
       dspacedb:
         condition: service_healthy

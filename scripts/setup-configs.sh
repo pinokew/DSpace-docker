@@ -15,7 +15,6 @@ chmod +x "$SCRIPT_DIR/patch-submission-forms.sh"
 # Запускаємо скрипти по черзі
 "$SCRIPT_DIR/patch-backend.sh"
 "$SCRIPT_DIR/patch-frontend.sh"
-"$SCRIPT_DIR/patch-nginx.sh"
 "$SCRIPT_DIR/patch-submission-forms.sh"
 
 echo "---------------------------------------------"
