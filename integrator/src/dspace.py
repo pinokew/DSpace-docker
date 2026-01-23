@@ -3,7 +3,7 @@ import requests
 import logging
 from json import JSONDecodeError
 from requests.exceptions import RequestException
-from .config import (
+from config import (
     DSPACE_API_URL, DSPACE_USER, DSPACE_PASS, 
     TIMEOUT, UPLOAD_TIMEOUT, DSPACE_SUBMISSION_SECTION
 )
