@@ -1,6 +1,32 @@
 services:
   # ===================================================
-  # DATABASE (PostgreSQL)
+  # TRAEFIK (Reverse Proxy)
+  # ===================================================
+  traefik:
+    image: traefik:v3.6
+    container_name: dspace-traefik
+    restart: unless-stopped
+    command:
+      - "--log.level=DEBUG"
+      - "--api.insecure=true"
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      # КРИТИЧНО для Cloudflare Tunnel:
+      - "--entrypoints.web.forwardedHeaders.insecure=true" 
+    ports:
+      - "8080:80"
+      - "8088:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    networks:
+      - dspacenet
+
+  # ===================================================
+  # DATABASE
   # ===================================================
   dspacedb:
     container_name: dspacedb
@@ -16,6 +42,8 @@ services:
       - dspacenet
     volumes:
       - ${VOL_POSTGRESQL_PATH:-./data/pgdata}:${POSTGRES_PGDATA:-/pgdata}
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dspace} -d ${POSTGRES_DB:-dspace} -h 127.0.0.1 -p ${POSTGRES_INTERNAL_PORT:-5432}"]
       interval: 10s
@@ -38,8 +66,9 @@ services:
     working_dir: /var/solr/data
     volumes:
       - ${VOL_SOLR_PATH:-./data/solr}:/var/solr/data
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     user: root
-    # Ініціалізація ядер, якщо папка порожня
     entrypoint:
       - /bin/bash
       - -c
@@ -83,17 +112,19 @@ services:
     environment:
       TZ: ${TZ:-Europe/Kyiv}
       JAVA_OPTS: "${DSPACE_JAVA_OPTS:--Xmx2000m -Djava.security.egd=file:/dev/./urandom}"
-      # Внутрішні налаштування
       dspace__P__dir: ${DSPACE_DIR:-/dspace}
       dspace__P__name: ${DSPACE_NAME:-KDV Library Repository}
       db__P__url: "jdbc:postgresql://dspacedb:${POSTGRES_INTERNAL_PORT:-5432}/${POSTGRES_DB:-dspace}"
       solr__P__server: "http://dspacesolr:${SOLR_INTERNAL_PORT:-8983}/solr"
-      # Публічні URL (для користувача)
+      
+      # === ВИКОРИСТАННЯ ЗМІННИХ (NO HARDCODE) ===
       dspace__P__server__P__url: ${DSPACE_REST_BASEURL:-http://localhost:8081/server}
       dspace__P__ui__P__url: ${DSPACE_UI_BASEURL:-http://localhost:8081}
-      # CORS та Proxy
-      proxies__P__trusted__P__ipranges: ${PROXIES_TRUSTED_IPRANGES:-0.0.0.0/0}
+      
+      # === CORS (Беремо зі змінної UI URL) ===
       rest__P__cors__P__allowed__D__origins: ${DSPACE_UI_BASEURL:-http://localhost:8081}
+      
+      proxies__P__trusted__P__ipranges: ${DSPACENET_SUBNET:-172.23.0.0/16}
     depends_on:
       dspacedb:
         condition: service_healthy
@@ -101,8 +132,6 @@ services:
         condition: service_healthy
     networks:
       - dspacenet
-    expose:
-      - "8080" # Тільки для внутрішньої мережі, Nginx проксує сюди
     logging:
       driver: "json-file"
       options:
@@ -112,7 +141,9 @@ services:
       - ${VOL_ASSETSTORE_PATH:-./data/assetstore}:/dspace/assetstore
       - ${VOL_EXPORTS_PATH:-./data/exports}:/dspace/exports
       - ./dspace/config/local.cfg:/dspace/config/local.cfg
-      - ./dspace/config/submission-forms.xml:/dspace/config/submission-forms.xml 
+      - ./dspace/config/submission-forms.xml:/dspace/config/submission-forms.xml
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     entrypoint:
       - /bin/bash
       - -c
@@ -130,9 +161,18 @@ services:
       timeout: 5s
       retries: 20
       start_period: 60s
+     
+    # --- TRAEFIK CONFIGURATION FOR BACKEND ---
+    labels:
+    - "traefik.enable=true"
+    - "traefik.http.routers.dspace-api.rule=Host(`${DSPACE_HOSTNAME}`) && PathPrefix(`/server`)"
+    - "traefik.http.routers.dspace-api.entrypoints=web"
+    - "traefik.http.routers.dspace-api.priority=100"
+    - "traefik.http.services.dspace-api.loadbalancer.server.port=8080"
+
 
   # ===================================================
-  # FRONTEND (Angular) + NGINX Sidecar
+  # FRONTEND (Angular)
   # ===================================================
   dspace-angular:
     container_name: dspace-angular
@@ -143,23 +183,22 @@ services:
         condition: service_healthy
     networks:
       - dspacenet
-    # Цей порт мапиться на HOST:8081, але трафік приймає Nginx (порт 80 всередині контейнера)
-    ports:
-      - "${NGINX_HTTP_PORT:-8081}:80"
     volumes:
       - ./ui-config/config.yml:/app/config/config.yml:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
-      # Важливо: SSR всередині має ходити напряму до бекенду
-      DSPACE_REST_SSRBASEURL: ${DSPACE_REST_SSRBASEURL:-http://dspace:8080/server}
-      # Явно задаємо базові URL, щоб перекрити можливі помилки в config.yml
+      # Внутрішнє звернення контейнера Angular до API (залишаємо http і ім'я сервісу, бо це внутрішня мережа Docker)
+      DSPACE_REST_SSRBASEURL: http://dspace:8080/server
+      
+      # === ВИКОРИСТАННЯ ЗМІННИХ (NO HARDCODE) ===
       DSPACE_UI_BASEURL: ${DSPACE_UI_BASEURL:-http://localhost:8081}
       DSPACE_REST_BASEURL: ${DSPACE_REST_BASEURL:-http://localhost:8081/server}
-      DSPACE_UI_HOST: ${DSPACE_UI_HOST:-0.0.0.0}
-      DSPACE_UI_PORT: ${DSPACE_UI_PORT:-8081}
-      DSPACE_UI_SSL: ${DSPACE_UI_SSL:-false}
-      # Логи
-      CI: "true"
-      FORCE_COLOR: "0"
+      
+      # Налаштування сервера Node.js
+      DSPACE_UI_HOST: 0.0.0.0
+      DSPACE_UI_PORT: 8081
+      DSPACE_UI_SSL: "false"
     logging:
       driver: "json-file"
       options:
@@ -170,40 +209,29 @@ services:
       interval: 10s
       timeout: 3s
       retries: 10
-      start_period: 30s
+      start_period: 60s
+    labels:
+    - "traefik.enable=true"
+    - "traefik.http.routers.dspace-ui.rule=Host(`${DSPACE_HOSTNAME}`)"
+    - "traefik.http.routers.dspace-ui.entrypoints=web"
+    - "traefik.http.routers.dspace-ui.priority=10"
+    - "traefik.http.services.dspace-ui.loadbalancer.server.port=8081"
+    - "traefik.http.services.dspace-ui.loadbalancer.passhostheader=true"
 
-  # Nginx (Sidecar) - працює в мережевому просторі Angular контейнера
-  nginx:
-    image: nginx:1.27-alpine
-    container_name: dspace-nginx
-    restart: unless-stopped
-    depends_on:
-      dspace-angular:
-        condition: service_healthy
-    network_mode: "service:dspace-angular"
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/ >/dev/null 2>&1"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
-
-  # Cloudflare Tunnel
   tunnel:
     image: cloudflare/cloudflared:latest
     container_name: dspace-tunnel
-    restart: unless-stopped
-    command: tunnel run --protocol http2
-    environment:
-      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    restart: always
     networks:
       - dspacenet
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-      
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    command: tunnel run
+    depends_on:
+      - traefik
+
 networks:
+  dspacedb-net: # Залишив сумісність
   dspacenet:
     name: dspacenet
     driver: bridge
