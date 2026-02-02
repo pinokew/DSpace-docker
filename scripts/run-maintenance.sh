@@ -18,6 +18,37 @@ docker exec "$CONTAINER_NAME" /dspace/bin/dspace index-discovery -b
 
 echo "[$(date)] --- Maintenance Complete ---"
 
+# --- БЛОК БЕЗПЕЧНОГО РОЗМОНТУВАННЯ ---
+
+# 1. Задаємо шлях (обов'язково повний, бо скрипт виконується від root)
+MOUNT_ROOT="/home/pinokew/GoogleDrive"
+
+echo "Починаю розмонтування дисків..." >> /home/pinokew/cron_shutdown.log
+
+# 2. Проходимо по всіх папках у GoogleDrive і розмонтовуємо їх
+# Ми використовуємо fusermount -uz (u=unmount, z=lazy - щоб не зависло, якщо диск зайнятий)
+for mount_dir in "$MOUNT_ROOT"/*; do
+    if mountpoint -q "$mount_dir"; then
+        echo "Розмонтовую: $mount_dir"
+        fusermount -uz "$mount_dir"
+    fi
+done
+
+# Те саме для сервера, якщо він є
+if mountpoint -q "/home/pinokew/Server/Local_SMB"; then
+    fusermount -uz "/home/pinokew/Server/Local_SMB"
+fi
+
+# 3. Даємо 5 секунд на завершення запису даних
+sleep 5
+
+# 4. Примусово завершуємо процеси rclone, якщо вони ще висять
+killall rclone 2>/dev/null
+
+echo "Всі диски відключено. Вимикаю систему." >> /home/pinokew/cron_shutdown.log
+
+# --- КІНЕЦЬ БЛОКУ ---
+
 sudo poweroff
 
 # 1.  Відкрий редактор cron на хості:
