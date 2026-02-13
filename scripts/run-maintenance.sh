@@ -1,67 +1,64 @@
 #!/bin/bash
+# Скрипт для запуску регулярного обслуговування DSpace та безпечного вимкнення.
+# Всі логи пишуться в stdout/stderr, які Cron перенаправляє в єдиний лог-файл.
+#     crontab -e
+#     0 13 * * * /home/user/шлях/до/папки/scripts/run-maintenance.sh >> /home/user/шлях/до/папки/cron.log 2>&1
+#     *Пояснення:*
+#     * `0 13 * * *` — 0 хвилин, 13 годин, кожен день, кожен місяць.
+#     * `>> .../cron.log` — записувати результат у файл, щоб ти міг перевірити, чи воно працювало.
 
-# Отримуємо назву контейнера (або дефолт dspace)
+set -e
+
+# Отримуємо назву контейнера
 CONTAINER_NAME="dspace"
 
 echo "[$(date)] --- Starting DSpace Maintenance ---"
 
 # 1. Витягуємо текст з нових файлів (Filter Media)
-# -v: verbose (детально)
-# -m: max 1000 items (щоб не вішати сервер, якщо файлів дуже багато)
+# ПРИБРАНО: прапорець -v (verbose), щоб не засмічувати лог текстом книг.
+# -m 1000: обмежує кількість оброблених за раз файлів.
 echo "[$(date)] Running Filter Media..."
-docker exec "$CONTAINER_NAME" /dspace/bin/dspace filter-media -v
+docker exec "$CONTAINER_NAME" /dspace/bin/dspace filter-media -m 1000
 
 # 2. Оновлюємо пошуковий індекс (Discovery)
 # -b: build index (оптимізує індекс)
 echo "[$(date)] Running Index Discovery..."
 docker exec "$CONTAINER_NAME" /dspace/bin/dspace index-discovery -b
 
-echo "[$(date)] --- Maintenance Complete ---"
+echo "[$(date)] --- Maintenance Complete. Starting Shutdown Sequence ---"
 
 # --- БЛОК БЕЗПЕЧНОГО РОЗМОНТУВАННЯ ---
 
-# 1. Задаємо шлях (обов'язково повний, бо скрипт виконується від root)
 MOUNT_ROOT="/home/pinokew/GoogleDrive"
+SMB_MOUNT="/home/pinokew/Server/Local_SMB"
 
-echo "Починаю розмонтування дисків..." >> /home/pinokew/cron_shutdown.log
+echo "[$(date)] Unmounting drives..."
 
-# 2. Проходимо по всіх папках у GoogleDrive і розмонтовуємо їх
-# Ми використовуємо fusermount -uz (u=unmount, z=lazy - щоб не зависло, якщо диск зайнятий)
+# 1. Розмонтування Google Drive
+# Використовуємо nullglob, щоб цикл не відпрацював, якщо папка порожня
+shopt -s nullglob
 for mount_dir in "$MOUNT_ROOT"/*; do
     if mountpoint -q "$mount_dir"; then
-        echo "Розмонтовую: $mount_dir"
+        echo "[$(date)] Unmounting: $mount_dir"
         fusermount -uz "$mount_dir"
     fi
 done
+shopt -u nullglob
 
-# Те саме для сервера, якщо він є
-if mountpoint -q "/home/pinokew/Server/Local_SMB"; then
-    fusermount -uz "/home/pinokew/Server/Local_SMB"
+# 2. Розмонтування локального SMB (якщо змонтовано)
+if mountpoint -q "$SMB_MOUNT"; then
+    echo "[$(date)] Unmounting: $SMB_MOUNT"
+    fusermount -uz "$SMB_MOUNT"
 fi
 
-# 3. Даємо 5 секунд на завершення запису даних
+# 3. Чекаємо завершення запису
 sleep 5
 
-# 4. Примусово завершуємо процеси rclone, якщо вони ще висять
-killall rclone 2>/dev/null
+# 4. Вбиваємо rclone (щоб не висів процес)
+# || true дозволяє скрипту йти далі, навіть якщо rclone не знайдено
+killall rclone 2>/dev/null || true
 
-echo "Всі диски відключено. Вимикаю систему." >> /home/pinokew/cron_shutdown.log
+echo "[$(date)] All drives disconnected. System poweroff initiated."
 
-# --- КІНЕЦЬ БЛОКУ ---
-
+# --- ВИМКНЕННЯ ---
 sudo poweroff
-
-# 1.  Відкрий редактор cron на хості:
-#     ```bash
-#     crontab -e
-#         *(Якщо спитає редактор, обирай `nano` — він найпростіший).*
-
-# 2.  Прокрути в самий низ і додай такий рядок (заміни `/home/user/...` на реальний шлях до твого проекту):
-
-#     ```bash
-#     # Запускати індексацію DSpace щодня о 13:00
-#     0 13 * * * /home/user/шлях/до/папки/scripts/run-maintenance.sh >> /home/user/шлях/до/папки/cron.log 2>&1
-    
-#     *Пояснення:*
-#     * `0 13 * * *` — 0 хвилин, 13 годин, кожен день, кожен місяць.
-#     * `>> .../cron.log` — записувати результат у файл, щоб ти міг перевірити, чи воно працювало.

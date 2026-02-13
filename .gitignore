@@ -11,5 +11,8 @@ logs/
 
 # Конфіги
 dspace/config/local.cfg
+dspace/config/submission-forms.xml
 ui-config/config.yml
 nginx/conf.d/dspace.conf
+
+archive/
