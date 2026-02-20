@@ -9,8 +9,32 @@
 
 set -e
 
-# Отримуємо назву контейнера
-CONTAINER_NAME="dspace"
+# --- 1. Load .env (Robust Mode) ---
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+ENV_FILE="$SCRIPT_DIR/../.env"
+
+if [ -f "$ENV_FILE" ]; then
+    echo "🌍 Loading environment variables..."
+    # Читаємо файл порядково, щоб уникнути проблем з пробілами без лапок
+    while IFS='=' read -r key value; do
+        # Пропускаємо коментарі та порожні рядки (хоча grep їх вже відфільтрував, перестрахуємось)
+        [[ "$key" =~ ^#.*$ ]] && continue
+        [[ -z "$key" ]] && continue
+        
+        # Видаляємо можливі пробіли на початку/кінці значення
+        # та прибираємо лапки, якщо вони є (щоб не було подвійних)
+        value=$(echo "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+
+        # Експортуємо змінну
+        export "$key=$value"
+    done < <(grep -vE '^\s*#' "$ENV_FILE" | grep -vE '^\s*$')
+else
+    echo "❌ Error: .env file not found."
+    exit 1
+fi
+
+# Отримуємо назву контейнера (з .env, fallback на "dspace")
+CONTAINER_NAME="${DSPACE_CONTAINER_NAME:-dspace}"
 
 echo "[$(date)] --- Starting DSpace Maintenance ---"
 
@@ -25,9 +49,14 @@ docker exec "$CONTAINER_NAME" /dspace/bin/dspace filter-media -m 1000
 echo "[$(date)] Running Index Discovery..."
 docker exec "$CONTAINER_NAME" /dspace/bin/dspace index-discovery -b
 
-echo "[$(date)] --- Maintenance Complete. Starting Shutdown Sequence ---"
+echo "[$(date)] Indexing completed. Checking for OAI updates..."
 
-# --- БЛОК БЕЗПЕЧНОГО РОЗМОНТУВАННЯ ---
+# 3. Імпортуємо OAI (якщо є нові записи)
+echo "[$(date)] OAI import: start"
+docker exec "$CONTAINER_NAME" /dspace/bin/dspace oai import
+echo "[$(date)] Imported OAI records"
+
+#--- БЛОК БЕЗПЕЧНОГО РОЗМОНТУВАННЯ ---
 
 MOUNT_ROOT="/home/pinokew/GoogleDrive"
 SMB_MOUNT="/home/pinokew/Server/Local_SMB"

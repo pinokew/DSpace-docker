@@ -29,6 +29,16 @@ TARGET_FILE="dspace/config/local.cfg"
 
 echo "🔧 Patching Backend Configuration (FULL SYNC)..."
 
+# Видаляє рядки конфігу за точним ключем на початку рядка: "key = ..."
+delete_config_key() {
+    local key="$1"
+    local file="$2"
+    local tmp
+    tmp=$(mktemp)
+    awk -v k="$key" 'index($0, k " = ") == 1 {next} {print}' "$file" > "$tmp"
+    mv "$tmp" "$file"
+}
+
 # Функція: видаляє ключ, якщо він є, і додає новий
 set_config() {
     local key="$1"
@@ -36,8 +46,8 @@ set_config() {
     local file="$3"
     
     # Видаляємо старий рядок
-    if grep -q "^$key =" "$file"; then
-        sed -i "/^$key =/d" "$file"
+    if grep -Fq "$key = " "$file"; then
+        delete_config_key "$key" "$file"
     fi
     
     # Додаємо новий
@@ -49,8 +59,8 @@ set_config() {
 remove_config() {
     local key="$1"
     local file="$2"
-    if grep -q "^$key =" "$file"; then
-        sed -i "/^$key =/d" "$file"
+    if grep -Fq "$key = " "$file"; then
+        delete_config_key "$key" "$file"
         echo "   REMOVED (Clean-up): $key"
     fi
 }
@@ -157,3 +167,21 @@ set_config "user.forgot-password" "false" "$TARGET_FILE"
 # Залишаємо тільки Українську (за замовчуванням) та Англійську
 set_config "default.locale" "uk" "$TARGET_FILE"
 set_config "webui.supported.locales" "uk, en" "$TARGET_FILE"
+
+# --- GOOGLE ANALYTICS 4 CONFIGURATION ---
+# Додаємо ці рядки в scripts/patch-local.cfg.sh
+
+# 1. Основний ключ GA4.
+set_config "google.analytics.key" "${DSPACE_GA_ID}" "$TARGET_FILE"
+
+# 2. API Secret (ОБОВ'ЯЗКОВО для GA4 для трекінгу скачувань)
+set_config "google.analytics.api-secret" "${DSPACE_GA_API_SECRET}" "$TARGET_FILE"
+
+# 3. CRON розклад (кожні 5 хвилин відправляти дані про скачування)
+set_config "google.analytics.cron" "0 0/5 * * * ?" "$TARGET_FILE"
+
+# 4. Ліміт буфера
+set_config "google.analytics.buffer.limit" "256" "$TARGET_FILE"
+
+# 5. Рахуємо тільки оригінальні файли
+set_config "google-analytics.bundles" "ORIGINAL" "$TARGET_FILE"

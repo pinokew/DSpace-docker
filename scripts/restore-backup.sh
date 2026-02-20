@@ -1,162 +1,254 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
 # ==============================================================================
-# 🚑 KDV DSpace DISASTER RECOVERY Script
+# 🚑 KDV DSpace DISASTER RECOVERY Script — restore-backup.sh
 # ==============================================================================
-# УВАГА: Цей скрипт повністю видаляє поточні дані та замінює їх даними з архіву!
-# Щоб активувати його, вам потрібно відредагувати файл і прибрати коментарі (#).
-# ==============================================================================
+# ⚠️  УВАГА / DANGER
+# Цей скрипт:
+#   1) ЗУПИНИТЬ DSpace stack
+#   2) ВИДАЛИТЬ поточні дані PostgreSQL
+#   3) ВИДАЛИТЬ поточні Solr cores (щоб змусити переіндексацію)
+#   4) (Опційно) ВИДАЛИТЬ поточний Assetstore і відновить його з бекапу (якщо є в архіві)
+#   5) ВІДНОВИТЬ БД з .sql дампу
+#   6) ЗАПУСТИТЬ stack і запустить переіндексацію
+#
+# ❗ Це руйнівна операція. Використовуй ТІЛЬКИ для DR-тестів або аварійного відновлення.
+# ============================================================================== 
 
-# 1. Завантаження конфігурації
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ----------------------------
+# 0) Helpers
+# ----------------------------
+log() { echo "[$(date '+%F %T')] $*"; }
+err() { echo "[$(date '+%F %T')] ❌ $*" >&2; }
+
+die() { err "$*"; exit 1; }
+
+# Keep terminal output readable: suppress routine stdout but keep stderr for errors.
+run_quiet() { "$@" >/dev/null; }
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+# ----------------------------
+# 1) Paths
+# ----------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+ENV_FILE="$PROJECT_ROOT/.env"
 
-# Завантажуємо .env (безпечно)
-if [ -f "$PROJECT_ROOT/.env" ]; then
-    export $(grep -v '^#' "$PROJECT_ROOT/.env" | grep -v 'JAVA_OPTS' | grep -v ' ' | xargs)
+# --- 1. Load .env (Robust Mode) ---
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+ENV_FILE="$SCRIPT_DIR/../.env"
+
+if [ -f "$ENV_FILE" ]; then
+    echo "🌍 Loading environment variables..."
+    # Читаємо файл порядково, щоб уникнути проблем з пробілами без лапок
+    while IFS='=' read -r key value; do
+        # Пропускаємо коментарі та порожні рядки (хоча grep їх вже відфільтрував, перестрахуємось)
+        [[ "$key" =~ ^#.*$ ]] && continue
+        [[ -z "$key" ]] && continue
+        
+        # Видаляємо можливі пробіли на початку/кінці значення
+        # та прибираємо лапки, якщо вони є (щоб не було подвійних)
+        value=$(echo "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+
+        # Експортуємо змінну
+        export "$key=$value"
+    done < <(grep -vE '^\s*#' "$ENV_FILE" | grep -vE '^\s*$')
 else
-    echo "CRITICAL ERROR: .env file not found."
+    echo "❌ Error: .env file not found."
     exit 1
 fi
 
-# 2. Аргументи
-BACKUP_FILE_RAW=$1
+# ----------------------------
+# 3) Args & preflight checks
+# ----------------------------
+if [[ $# -lt 1 ]]; then
+  echo "Usage: sudo $0 <path_to_backup_file.tar.gz>"
+  echo "Example: sudo $0 /srv/backups/dspace_full_2026-02-18.tar.gz"
+  exit 1
+fi
 
-# Перетворюємо на абсолютний шлях
+BACKUP_FILE_RAW="$1"
 if [[ "$BACKUP_FILE_RAW" = /* ]]; then
-    BACKUP_FILE="$BACKUP_FILE_RAW"
+  BACKUP_FILE="$BACKUP_FILE_RAW"
 else
-    BACKUP_FILE="$(pwd)/$BACKUP_FILE_RAW"
+  BACKUP_FILE="$(pwd)/$BACKUP_FILE_RAW"
 fi
 
-# 3. Перевірки перед стартом
-if [ -z "$BACKUP_FILE_RAW" ]; then
-    echo "Usage: sudo $0 <path_to_backup_file.tar.gz>"
-    exit 1
-fi
+[[ -f "$BACKUP_FILE" ]] || die "Backup file not found: $BACKUP_FILE"
 
-if [ ! -f "$BACKUP_FILE" ]; then
-    echo "ERROR: Backup file not found."
-    exit 1
-fi
+require_cmd tar
+require_cmd find
+require_cmd docker
+require_cmd sudo
 
-# Тимчасова папка для розпаковки
+# ВАЖЛИВО: нижче — критичні шляхи з SSOT
+: "${VOL_POSTGRESQL_PATH:?VOL_POSTGRESQL_PATH is required in .env}"
+: "${VOL_SOLR_PATH:?VOL_SOLR_PATH is required in .env}"
+: "${VOL_ASSETSTORE_PATH:?VOL_ASSETSTORE_PATH is required in .env}"
+
+# Твій compose файл
+COMPOSE_FILE="$PROJECT_ROOT/docker-compose.yml"
+[[ -f "$COMPOSE_FILE" ]] || die "docker-compose.yml not found at: $COMPOSE_FILE"
+
 TEMP_DIR="/tmp/kdv_restore_run_$(date +%s)"
 
-echo "======================================================="
-echo "⚠️  WARNING: DSpace DISASTER RECOVERY MODE"
-echo "======================================================="
-echo "Target Backup: $BACKUP_FILE"
-echo ""
-echo "This process will:"
-echo "  1. STOP all DSpace containers."
-echo "  2. DELETE all current Database data."
-echo "  3. DELETE all current Assetstore files (PDFs)."
-echo "  4. RESTORE data from the backup archive."
-echo ""
+# ----------------------------
+# 4) BIG WARNING + manual confirmation
+# ----------------------------
+cat <<EOF
+=======================================================
+⚠️  WARNING: DSpace DISASTER RECOVERY MODE
+=======================================================
+Target backup archive:
+  $BACKUP_FILE
 
-# --- 🔒 ЗАПОБІЖНИК (SAFETY LOCK) ---
-echo "⛔ SCRIPT IS LOCKED FOR SAFETY."
-echo "   To enable restore, open this file and comment out the 'exit 0' line below."
-echo "   Also uncomment the destructive commands in sections 5 and 6."
-exit 0  # <--- ВИДАЛИ АБО ЗАКОМЕНТУЙ ЦЕЙ РЯДОК, ЩОБ СКРИПТ ЗАПРАЦЮВАВ
-# -----------------------------------
+This process WILL:
+  1) STOP all DSpace containers
+  2) DELETE current PostgreSQL data at:
+     $VOL_POSTGRESQL_PATH
+  3) DELETE current Solr data at:
+     $VOL_SOLR_PATH
+  4) DELETE current Assetstore at:
+     $VOL_ASSETSTORE_PATH
+     (ONLY if the backup archive contains an assetstore/ directory)
+  5) RESTORE database from SQL dump in the archive
+  6) RESTORE assetstore from the archive (if present)
+  7) START the full stack and RE-INDEX Solr
 
+🚫 If you are not 100% sure — press Ctrl+C now.
+EOF
 
-echo "Are you absolutely sure? Type 'RESTORE' to continue:"
-read CONFIRMATION
-if [ "$CONFIRMATION" != "RESTORE" ]; then
-    echo "Operation cancelled."
-    exit 1
-fi
+# Подвійне підтвердження: спочатку "YES", потім "RESTORE"
+read -r -p "Type 'YES' to confirm you understand ALL DATA WILL BE DELETED: " CONFIRM1
+[[ "$CONFIRM1" == "YES" ]] || die "Operation cancelled."
 
-# 4. Розпаковка архіву
-echo "[1/6] Unpacking backup to temp..."
+read -r -p "Type 'RESTORE' to start restore now: " CONFIRM2
+[[ "$CONFIRM2" == "RESTORE" ]] || die "Operation cancelled."
+
+# ----------------------------
+# 5) Unpack archive and locate artifacts
+# ----------------------------
+log "[1/6] Unpacking backup to temp: $TEMP_DIR"
 mkdir -p "$TEMP_DIR"
 tar -xzf "$BACKUP_FILE" -C "$TEMP_DIR"
 
-SQL_DUMP=$(find "$TEMP_DIR" -name "*.sql" | head -n 1)
-EXTRACTED_ASSETSTORE=$(find "$TEMP_DIR" -type d -name "assetstore" | head -n 1)
+SQL_DUMP="$(find "$TEMP_DIR" -maxdepth 5 -type f -name "*.sql" | head -n 1 || true)"
+EXTRACTED_ASSETSTORE="$(find "$TEMP_DIR" -maxdepth 5 -type d -name "assetstore" | head -n 1 || true)"
 
-if [ -z "$SQL_DUMP" ]; then
-    echo "ERROR: No SQL dump found in backup. Aborting."
-    rm -rf "$TEMP_DIR"
-    exit 1
+[[ -n "$SQL_DUMP" ]] || { rm -rf "$TEMP_DIR"; die "No SQL dump (*.sql) found in backup archive."; }
+
+log "   Found SQL dump: $SQL_DUMP"
+if [[ -n "$EXTRACTED_ASSETSTORE" ]]; then
+  log "   Found assetstore directory in backup: $EXTRACTED_ASSETSTORE"
+else
+  log "   Backup has NO assetstore directory (cloud/metadata-only backup?)"
 fi
 
-# 5. Зупинка та Очищення (DESTRUCTIVE STEP)
-echo "[2/6] Stopping containers and cleaning volumes..."
+# ----------------------------
+# 6) Stop stack + destructive cleanup
+# ----------------------------
+log "[2/6] Stopping containers (docker compose down)"
+run_quiet docker compose -f "$COMPOSE_FILE" down
 
-# --- РОЗКОМЕНТУЙ НИЖЧЕ ДЛЯ АКТИВАЦІЇ ---
-# docker compose -f "$PROJECT_ROOT/docker-compose.yml" down
+log "   Cleaning PostgreSQL volume: $VOL_POSTGRESQL_PATH"
+# safety: require non-empty and not root
+[[ -n "$VOL_POSTGRESQL_PATH" && "$VOL_POSTGRESQL_PATH" != "/" ]] || die "Refusing to wipe VOL_POSTGRESQL_PATH=$VOL_POSTGRESQL_PATH"
+sudo rm -rf "${VOL_POSTGRESQL_PATH:?}/"*
 
-# echo "   Cleaning PostgreSQL volume..."
-# sudo rm -rf "${VOL_POSTGRESQL_PATH:?}/"*
+log "   Cleaning Solr volume (forces re-index): $VOL_SOLR_PATH"
+[[ -n "$VOL_SOLR_PATH" && "$VOL_SOLR_PATH" != "/" ]] || die "Refusing to wipe VOL_SOLR_PATH=$VOL_SOLR_PATH"
+sudo rm -rf "${VOL_SOLR_PATH:?}/"*
 
-# echo "   Cleaning Solr volume (to force re-index)..."
-# sudo rm -rf "${VOL_SOLR_PATH:?}/"*
+if [[ -n "$EXTRACTED_ASSETSTORE" ]]; then
+  log "   Cleaning Assetstore volume: $VOL_ASSETSTORE_PATH"
+  [[ -n "$VOL_ASSETSTORE_PATH" && "$VOL_ASSETSTORE_PATH" != "/" ]] || die "Refusing to wipe VOL_ASSETSTORE_PATH=$VOL_ASSETSTORE_PATH"
+  sudo rm -rf "${VOL_ASSETSTORE_PATH:?}/"*
+else
+  log "   ⚠️  Skipping Assetstore wipe (backup has no assetstore). Current files will be kept."
+fi
 
-# if [ -d "$EXTRACTED_ASSETSTORE" ]; then
-#     echo "   Cleaning Assetstore volume..."
-#     sudo rm -rf "${VOL_ASSETSTORE_PATH:?}/"*
-# else
-#     echo "   ⚠️  Backup has NO Assetstore (Cloud backup?). SKIPPING Assetstore wipe to save current files."
-# fi
-# ---------------------------------------
+# ----------------------------
+# 7) Restore DB
+# ----------------------------
+log "[3/6] Restoring Database"
 
-# 6. Відновлення (RESTORE STEP)
-echo "[3/6] Restoring Database..."
+# Start only DB first
+log "   Starting database service (dspacedb)"
+run_quiet docker compose -f "$COMPOSE_FILE" up -d dspacedb
 
-# --- РОЗКОМЕНТУЙ НИЖЧЕ ДЛЯ АКТИВАЦІЇ ---
-# Стартуємо тільки базу
-# docker compose -f "$PROJECT_ROOT/docker-compose.yml" up -d dspacedb
-# echo "   Waiting for Database to be ready (10s)..."
-# sleep 10
+log "   Waiting for DB to become ready (up to 60s)"
+for i in {1..30}; do
+  if docker compose -f "$COMPOSE_FILE" exec -T dspacedb pg_isready -U "${POSTGRES_USER:-dspace}" -d "${POSTGRES_DB:-dspace}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+  if [[ $i -eq 30 ]]; then
+    rm -rf "$TEMP_DIR"
+    die "Database did not become ready in time."
+  fi
+done
 
-# Відновлюємо схему та дані (спочатку дропаємо, бо volume може бути не пустим якщо rm не спрацював)
-# docker compose -f "$PROJECT_ROOT/docker-compose.yml" exec -T dspacedb dropdb -U dspace dspace --if-exists
-# docker compose -f "$PROJECT_ROOT/docker-compose.yml" exec -T dspacedb createdb -U dspace dspace
+# Drop + create DB (in case leftovers exist)
+log "   Dropping and recreating database: ${POSTGRES_DB:-dspace}"
+run_quiet docker compose -f "$COMPOSE_FILE" exec -T dspacedb dropdb -U "${POSTGRES_USER:-dspace}" "${POSTGRES_DB:-dspace}" --if-exists
+# Postgres image usually auto-creates DB on first run, but after wipe we recreate explicitly
+run_quiet docker compose -f "$COMPOSE_FILE" exec -T dspacedb createdb -U "${POSTGRES_USER:-dspace}" "${POSTGRES_DB:-dspace}"
 
-# cat "$SQL_DUMP" | docker compose -f "$PROJECT_ROOT/docker-compose.yml" exec -T -i dspacedb psql -U dspace dspace
-# ---------------------------------------
+log "   Importing SQL dump into database"
+docker compose -f "$COMPOSE_FILE" exec -T -i dspacedb \
+  psql -v ON_ERROR_STOP=1 -q -U "${POSTGRES_USER:-dspace}" "${POSTGRES_DB:-dspace}" \
+  < "$SQL_DUMP" >/dev/null
 
-# 7. Відновлення файлів
-echo "[4/6] Restoring Files..."
+# ----------------------------
+# 8) Restore files (assetstore)
+# ----------------------------
+log "[4/6] Restoring Files"
+if [[ -n "$EXTRACTED_ASSETSTORE" ]]; then
+  log "   Copying Assetstore files to: $VOL_ASSETSTORE_PATH"
+  # Use rsync-like semantics via cp; assetstore may contain many files
+  sudo cp -a "$EXTRACTED_ASSETSTORE/." "$VOL_ASSETSTORE_PATH/"
 
-# --- РОЗКОМЕНТУЙ НИЖЧЕ ДЛЯ АКТИВАЦІЇ ---
-# if [ -d "$EXTRACTED_ASSETSTORE" ]; then
-#     echo "   Copying Assetstore files..."
-#     cp -r "$EXTRACTED_ASSETSTORE/"* "$VOL_ASSETSTORE_PATH/"
-#     # Відновлюємо права (важливо для Docker)
-#     sudo chown -R 1000:1000 "$VOL_ASSETSTORE_PATH"
-# else
-#     echo "   Skipping Assetstore restore (not present in backup)."
-# fi
-# ---------------------------------------
+  # Restore expected ownership for DSpace (typically 1000:1000)
+  # If you use different UID/GID, you can override via .env: DSPACE_UID / DSPACE_GID
+  DSPACE_UID="${DSPACE_UID:-1000}"
+  DSPACE_GID="${DSPACE_GID:-1000}"
+  log "   Setting ownership for assetstore to ${DSPACE_UID}:${DSPACE_GID}"
+  sudo chown -R "${DSPACE_UID}:${DSPACE_GID}" "$VOL_ASSETSTORE_PATH"
+else
+  log "   Skipping Assetstore restore (not present in backup)."
+fi
 
-# 8. Запуск та Індексація
-echo "[5/6] Starting Full Stack..."
+# ----------------------------
+# 9) Start full stack + reindex
+# ----------------------------
+log "[5/6] Starting Full Stack"
+run_quiet docker compose -f "$COMPOSE_FILE" up -d
 
-# --- РОЗКОМЕНТУЙ НИЖЧЕ ДЛЯ АКТИВАЦІЇ ---
-# docker compose -f "$PROJECT_ROOT/docker-compose.yml" up -d
+log "   Waiting for DSpace Backend to start (up to 90s)"
+for i in {1..30}; do
+  if docker compose -f "$COMPOSE_FILE" exec -T dspace wget -qO- "http://127.0.0.1:${DSPACE_INTERNAL_PORT:-8080}${DSPACE_REST_NAMESPACE:-/server}/api/core/sites" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 3
+  if [[ $i -eq 30 ]]; then
+    rm -rf "$TEMP_DIR"
+    die "DSpace backend did not become healthy in time."
+  fi
+done
 
-# echo "   Waiting for DSpace Backend to start (30s)..."
-# sleep 30
+log "[6/6] Re-indexing Solr (Critical Step)"
+run_quiet docker compose -f "$COMPOSE_FILE" exec -T dspace /dspace/bin/dspace index-discovery -b
 
-# echo "[6/6] Re-indexing Solr (Critical Step)..."
-# docker compose -f "$PROJECT_ROOT/docker-compose.yml" exec -T dspace /dspace/bin/dspace index-discovery -b
-# ---------------------------------------
-
-# 9. Фінал
+# ----------------------------
+# 10) Cleanup
+# ----------------------------
 rm -rf "$TEMP_DIR"
-echo "======================================================="
-echo "✅ RESTORE COMPLETED."
-echo "   Please allow a few minutes for Solr to rebuild indexes."
-echo "======================================================="
-```
 
-### Як це працює зараз (Безпечний режим)
-
-Якщо ти запустиш цей скрипт зараз:
-```bash
-sudo ./scripts/restore-dspace.sh backups/full_local_....tar.gz
+log "======================================================="
+log "✅ RESTORE COMPLETED."
+log "   Note: allow a few minutes for Solr caches to warm up."
+log "======================================================="
