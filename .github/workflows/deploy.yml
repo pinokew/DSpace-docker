@@ -84,7 +84,7 @@ jobs:
           script: |
             echo "Starting deployment..."
             # Переходимо в папку проєкту
-            cd /home/${{ secrets.SERVER_USER }}/Dspace # Зміни шлях, якщо він інший
+            cd /home/${{ secrets.SERVER_USER }}/Dspace/DSpace-docker # Зміни шлях, якщо він інший
             
             # 1. Оновлюємо код (БЕЗПЕЧНИЙ МЕТОД ЗАМІСТЬ PULL)
             # Примусово робимо стан сервера ідентичним до гілки main на GitHub.
