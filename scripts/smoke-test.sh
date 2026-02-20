@@ -4,6 +4,7 @@
 # Встановлюємо URL (з .env або дефолтні)
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 if [ -f "$SCRIPT_DIR/../.env" ]; then
+    # shellcheck disable=SC2046
     export $(grep -v '^#' "$SCRIPT_DIR/../.env" | xargs)
 fi
 
@@ -22,7 +23,8 @@ check_status() {
 
     echo -n "Testing $name ($url) ... "
     # Робимо запит, беремо тільки HTTP код, чекаємо макс 10 секунд
-    local status=$(curl -o /dev/null -s -w "%{http_code}\n" -m 10 "$url")
+    local status
+    status=$(curl -o /dev/null -s -w "%{http_code}\n" -m 10 "$url")
 
     if [ "$status" == "$expected" ]; then
         echo "✅ OK ($status)"
