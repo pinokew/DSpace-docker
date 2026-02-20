@@ -1,0 +1,156 @@
+name: DSpace CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches:
+      - main
+
+# Захист від паралельних деплоїв (особливо якщо зробили кілька push підряд)
+concurrency:
+  group: dspace-prod-deploy
+  cancel-in-progress: false
+
+jobs:
+  # ==========================================
+  # 7.1 CI: Continuous Integration (Перевірки)
+  # ==========================================
+  ci-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: 🐚 Run Shellcheck (Script Validation)
+        run: |
+          # Перевіряємо ВСІ bash-скрипти у scripts/ включно з підпапками
+          find scripts -type f -name "*.sh" -print0 \
+            | xargs -0 shellcheck -e SC1090,SC1091,SC2034,SC2046,SC2086,SC2155
+
+      - name: 🐳 YAML Validation (Docker Compose Config)
+        run: |
+          # Створюємо dummy .env, щоб docker compose не сварився на відсутні змінні
+          cp example.env .env
+
+          # Валідація синтаксису compose
+          docker compose -f docker-compose.yml --env-file .env config -q
+
+          # Додаткова перевірка: після рендеру не повинно лишатися ${...}
+          docker compose -f docker-compose.yml --env-file .env config \
+            | grep -n "\${" && { echo "❌ Unresolved variables found in rendered compose"; exit 1; } || true
+
+          echo "✅ docker-compose.yml is valid."
+
+      - name: 🔑 Env Validation (CI mock)
+        run: |
+          chmod +x scripts/verify-env.sh
+          ./scripts/verify-env.sh --ci-mock
+
+      - name: ⚙️ Config Patching Dry-Run
+        run: |
+          # Готуємо мінімальну структуру, якщо патчер очікує файл
+          mkdir -p dspace/config
+          touch dspace/config/local.cfg
+
+          # Використовуємо dummy .env (з example.env), щоб патчер не падав на відсутніх ключах
+          cp example.env .env
+
+          chmod +x scripts/patch-local.cfg.sh
+          ./scripts/patch-local.cfg.sh
+
+          echo "✅ Patching script executed without errors."
+
+      - name: 🛡️ Trivy Vulnerability Scanner (Compose)
+        # pinned version (не master)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          hide-progress: false
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0' # Постав '1', якщо хочеш, щоб CI падав через вразливості
+
+  # ==========================================
+  # 7.2 CD: Continuous Deployment (Деплой)
+  # ==========================================
+  cd-deploy:
+    needs: ci-checks
+    # Запускаємо деплой ТІЛЬКИ для push (не PR): або main, або тег релізу v*.*.*
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DEPLOY_FULL_REF: ${{ github.ref }}
+      DEPLOY_REF: ${{ github.ref_name }}
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🖧 Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: 🚀 Deploy to Server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script_stop: true
+          # Передаємо ref у віддалений скрипт
+          envs: DEPLOY_FULL_REF,DEPLOY_REF
+          script: |
+            set -euo pipefail
+
+            echo "Starting deployment..."
+
+            PROJECT_DIR="/home/${{ secrets.SERVER_USER }}/Dspace/DSpace-docker"
+            cd "$PROJECT_DIR"
+
+            # 0) Перевірка, що SSOT .env існує (його НЕ чіпаємо з GitHub)
+            if [ ! -f .env ]; then
+              echo "❌ ERROR: .env not found in $PROJECT_DIR. SSOT is missing."
+              exit 1
+            fi
+
+            # 1) Безпечне оновлення коду (без git pull)
+            git fetch --prune --tags origin
+
+            if [[ "${DEPLOY_FULL_REF}" == refs/tags/* ]]; then
+              echo "Deploying tag: ${DEPLOY_REF}"
+              git checkout -f "${DEPLOY_REF}"
+            else
+              echo "Deploying branch: main"
+              git checkout -f main
+              git reset --hard origin/main
+            fi
+
+            # 2) Права на скрипти
+            chmod +x scripts/*.sh || true
+
+            # 3) Генерація/оновлення конфігів з SSOT (.env)
+            #    (щоб local.cfg та інші патчені файли відповідали актуальним змінним)
+            chmod +x scripts/patch-local.cfg.sh
+            ./scripts/patch-local.cfg.sh
+
+            # 4) Оновлення образів та запуск
+            docker compose pull
+            docker compose up -d --remove-orphans
+
+            # 5) Smoke tests (після деплою)
+            chmod +x scripts/smoke-test.sh
+            ./scripts/smoke-test.sh
+
+            echo "✅ DEPLOY OK"

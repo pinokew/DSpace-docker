@@ -3,9 +3,20 @@
 
 # Встановлюємо URL (з .env або дефолтні)
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
-if [ -f "$SCRIPT_DIR/../.env" ]; then
-    # shellcheck disable=SC2046
-    export $(grep -v '^#' "$SCRIPT_DIR/../.env" | xargs)
+ENV_FILE="$SCRIPT_DIR/../.env"
+
+if [ -f "$ENV_FILE" ]; then
+    # Robust .env parser (ігнорує проблеми з пробілами та лапками)
+    while IFS='=' read -r key value; do
+        [[ "$key" =~ ^#.*$ ]] && continue
+        [[ -z "$key" ]] && continue
+        
+        # Видаляємо пробіли з ключа та зайві символи/лапки зі значення
+        key=$(echo "$key" | tr -d '[:space:]')
+        value=$(echo "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+        
+        export "$key=$value"
+    done < <(grep -vE '^\s*#' "$ENV_FILE" | grep -vE '^\s*$')
 fi
 
 UI_URL=${DSPACE_UI_URL:-"https://repo.fby.com.ua"}
