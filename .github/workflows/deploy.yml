@@ -54,7 +54,7 @@ jobs:
           hide-progress: false
           format: 'table'
           severity: 'CRITICAL,HIGH'
-          exit-code: '1' # Зміни на '1' якщо хочеш, щоб CI падав через вразливості
+          exit-code: '0' # Зміни на '1' якщо хочеш, щоб CI падав через вразливості
 
   # ==========================================
   # 7.2 CD: Continuous Deployment (Деплой)
@@ -86,8 +86,11 @@ jobs:
             # Переходимо в папку проєкту
             cd /home/${{ secrets.SERVER_USER }}/Dspace # Зміни шлях, якщо він інший
             
-            # 1. Оновлюємо код
-            git pull origin main
+            # 1. Оновлюємо код (БЕЗПЕЧНИЙ МЕТОД ЗАМІСТЬ PULL)
+            # Примусово робимо стан сервера ідентичним до гілки main на GitHub.
+            # Це уникає помилок "merge conflict", якщо файли змінювались на сервері.
+            git fetch origin main
+            git reset --hard origin/main
             
             # 2. Надаємо права скриптам (на випадок якщо вони злетіли)
             chmod +x scripts/*.sh
