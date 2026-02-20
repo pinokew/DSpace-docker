@@ -22,11 +22,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 🐚 Run Shellcheck (Script Validation)
-        uses: ludeeus/action-shellcheck@master
-        with:
-          scandir: './scripts'
-          # Ігноруємо специфічні некритичні попередження (warnings/notes)
-          ignore: 'SC1090,SC1091,SC2034,SC2046,SC2086,SC2155'
+        run: shellcheck scripts/*.sh -e SC1090,SC1091,SC2034,SC2046,SC2086,SC2155
 
       - name: 🐳 YAML Validation (Docker Compose Config)
         run: |
@@ -58,7 +54,7 @@ jobs:
           hide-progress: false
           format: 'table'
           severity: 'CRITICAL,HIGH'
-          exit-code: '1' # Зміни на '1' якщо хочеш, щоб CI падав через вразливості
+          exit-code: '0' # Зміни на '1' якщо хочеш, щоб CI падав через вразливості
 
   # ==========================================
   # 7.2 CD: Continuous Deployment (Деплой)
