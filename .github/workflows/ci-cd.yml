@@ -117,45 +117,41 @@ jobs:
 
             echo "Starting deployment..."
 
-            PROJECT_DIR="/home/${{ secrets.SERVER_USER }}/Dspace/DSpace-docker"
+            PROJECT_DIR="/home/${SERVER_USER}/Dspace/DSpace-docker"
             cd "$PROJECT_DIR"
 
-            # 0) Перевірка, що SSOT .env існує (його НЕ чіпаємо з GitHub)
+            # 0) SSOT .env must exist
             if [ ! -f .env ]; then
               echo "❌ ERROR: .env not found in $PROJECT_DIR. SSOT is missing."
               exit 1
             fi
 
-            # 1) Безпечне оновлення коду (без git pull)
+            # 1) Safe update code (no git pull)
             git fetch --prune --tags origin
 
-            case "${DEPLOY_FULL_REF}" in
-              refs/tags/*)
-                echo "Deploying tag: ${DEPLOY_REF}"
-                git checkout -f "${DEPLOY_REF}"
-                ;;
-              *)
-                echo "Deploying branch: main"
-                git checkout -f main
-                git reset --hard origin/main
-                ;;
-            esac
+            # 1.1) Deploy tag or main (NO bare [[ ]] / NO syntax traps)
+            if echo "${DEPLOY_FULL_REF}" | grep -q '^refs/tags/'; then
+              echo "Deploying tag: ${DEPLOY_REF}"
+              git checkout -f "${DEPLOY_REF}"
+            else
+              echo "Deploying branch: main"
+              git checkout -f main
+              git reset --hard origin/main
+            fi
 
-            # 2) Права на скрипти
+            # 2) Script permissions
             chmod +x scripts/*.sh || true
 
-            # 3) Генерація/оновлення конфігів з SSOT (.env)
-            #    (щоб local.cfg та інші патчені файли відповідали актуальним змінним)
+            # 3) Patch configs from SSOT (.env)
             chmod +x scripts/patch-local.cfg.sh
             ./scripts/patch-local.cfg.sh
 
-            # 4) Оновлення образів та запуск
+            # 4) Pull + up
             docker compose pull
             docker compose up -d --remove-orphans
 
-            # 5) Smoke tests (після деплою)
+            # 5) Smoke tests
             chmod +x scripts/smoke-test.sh
-
             ./scripts/smoke-test.sh || {
               echo "---- docker compose ps ----"
               docker compose ps || true
