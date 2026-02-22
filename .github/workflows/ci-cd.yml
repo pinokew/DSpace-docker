@@ -117,7 +117,7 @@ jobs:
 
             echo "Starting deployment..."
 
-            PROJECT_DIR="/home/${SERVER_USER}/Dspace/DSpace-docker"
+            PROJECT_DIR="${HOME}/Dspace/DSpace-docker"
             cd "$PROJECT_DIR"
 
             # 0) SSOT .env must exist
