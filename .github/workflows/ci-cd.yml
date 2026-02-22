@@ -129,14 +129,17 @@ jobs:
             # 1) Безпечне оновлення коду (без git pull)
             git fetch --prune --tags origin
 
-            if [[ "${DEPLOY_FULL_REF}" == refs/tags/* ]]; then
-              echo "Deploying tag: ${DEPLOY_REF}"
-              git checkout -f "${DEPLOY_REF}"
-            else
-              echo "Deploying branch: main"
-              git checkout -f main
-              git reset --hard origin/main
-            fi
+            case "${DEPLOY_FULL_REF}" in
+              refs/tags/*)
+                echo "Deploying tag: ${DEPLOY_REF}"
+                git checkout -f "${DEPLOY_REF}"
+                ;;
+              *)
+                echo "Deploying branch: main"
+                git checkout -f main
+                git reset --hard origin/main
+                ;;
+            esac
 
             # 2) Права на скрипти
             chmod +x scripts/*.sh || true
