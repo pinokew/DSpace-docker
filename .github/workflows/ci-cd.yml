@@ -129,15 +129,18 @@ jobs:
             # 1) Safe update code (no git pull)
             git fetch --prune --tags origin
 
-            # 1.1) Deploy tag or main (NO bare [[ ]] / NO syntax traps)
-            if echo "${DEPLOY_FULL_REF}" | grep -q '^refs/tags/'; then
-              echo "Deploying tag: ${DEPLOY_REF}"
-              git checkout -f "${DEPLOY_REF}"
-            else
-              echo "Deploying branch: main"
-              git checkout -f main
-              git reset --hard origin/main
-            fi
+            # 1.1) Deploy tag or main (avoid commands that return 1 in conditions)
+            case "${DEPLOY_FULL_REF}" in
+              refs/tags/*)
+                echo "Deploying tag: ${DEPLOY_REF}"
+                git checkout -f "${DEPLOY_REF}"
+                ;;
+              *)
+                echo "Deploying branch: main"
+                git checkout -f main
+                git reset --hard origin/main
+                ;;
+            esac
 
             # 2) Script permissions
             chmod +x scripts/*.sh || true
