@@ -150,14 +150,22 @@ jobs:
             docker compose up -d --remove-orphans
 
             # 5) Smoke tests (після деплою)
-            chmod +x scripts/smoke-test.sh
-            ./scripts/smoke-test.sh
-            echo "---- docker compose ps ----"
-            docker compose ps
-            echo "---- dspace logs ----"
-            docker logs --tail=120 dspace || true
-            echo "---- traefik logs ----"
-            docker logs --tail=120 dspace-traefik || true
-            exit 1
-            }
-            echo "✅ DEPLOY OK"
+              chmod +x scripts/smoke-test.sh
+
+              ./scripts/smoke-test.sh || {
+                echo "---- docker compose ps ----"
+                docker compose ps || true
+
+                echo "---- dspace logs ----"
+                docker logs --tail=120 dspace || true
+
+                echo "---- traefik logs ----"
+                docker logs --tail=120 dspace-traefik || true
+
+                echo "---- solr logs ----"
+                docker logs --tail=120 dspacesolr || true
+
+                exit 1
+              }
+
+              echo "✅ DEPLOY OK"
