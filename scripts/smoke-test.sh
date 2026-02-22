@@ -39,7 +39,7 @@ load_env() {
     fi
 
     printf -v "$key" '%s' "$value"
-    export "$key"
+    export "${key?}"
   done < "$env_file"
 }
 
