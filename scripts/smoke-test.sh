@@ -21,7 +21,8 @@ load_env() {
     [[ -z "${line//[[:space:]]/}" ]] && continue
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
 
-    line="${line#[[:space:]]export[[:space:]]}"
+    # Support both `export KEY=...` and plain `KEY=...` (with optional leading spaces).
+    line="$(echo "$line" | sed -E 's/^[[:space:]]*export[[:space:]]+//')"
     [[ "$line" == *"="* ]] || continue
 
     local key="${line%%=*}"
