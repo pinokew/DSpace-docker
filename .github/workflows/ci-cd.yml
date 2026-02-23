@@ -90,19 +90,39 @@ jobs:
           TRIVY_IMAGE="aquasec/trivy:0.60.0"
           docker pull "$TRIVY_IMAGE"
 
+          FAILED_IMAGES=()
+
           while IFS= read -r image; do
             [ -n "$image" ] || continue
-            echo "Scanning image: $image"
+            echo "::group::Trivy scan: $image"
+            set +e
             docker run --rm \
               -v "$HOME/.cache/trivy:/root/.cache/" \
               -v "${PWD}:/work" \
               "$TRIVY_IMAGE" image \
+              --scanners vuln \
               --severity CRITICAL \
               --exit-code 1 \
               --ignore-unfixed \
               --ignorefile /work/.trivyignore \
               "$image"
+            RC=$?
+            set -e
+            echo "::endgroup::"
+
+            if [ "$RC" -ne 0 ]; then
+              FAILED_IMAGES+=("$image")
+              echo "::error title=Trivy failed::Image '$image' has non-ignored CRITICAL findings."
+            fi
           done < /tmp/compose-images.txt
+
+          if [ "${#FAILED_IMAGES[@]}" -gt 0 ]; then
+            echo "❌ Trivy failed for image(s):"
+            printf ' - %s\n' "${FAILED_IMAGES[@]}"
+            exit 1
+          fi
+
+          echo "✅ Trivy image scan passed for all images."
 
   # ==========================================
   # 7.2 CD: Continuous Deployment (Деплой)
