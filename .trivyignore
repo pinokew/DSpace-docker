@@ -9,3 +9,5 @@ CVE-2025-66516
 CVE-2025-54988
 # CVE-2025-12383: jersey-client transitive dependency.
 CVE-2025-12383
+# CVE-2025-68121: gosu binary in postgres:15 image (upstream base image issue).
+CVE-2025-68121

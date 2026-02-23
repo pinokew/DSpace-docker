@@ -95,17 +95,20 @@ jobs:
           while IFS= read -r image; do
             [ -n "$image" ] || continue
             echo "::group::Trivy scan: $image"
+            report_json="$(mktemp)"
             set +e
             docker run --rm \
               -v "$HOME/.cache/trivy:/root/.cache/" \
               -v "${PWD}:/work" \
               "$TRIVY_IMAGE" image \
+              --quiet \
               --scanners vuln \
               --severity CRITICAL \
               --exit-code 1 \
               --ignore-unfixed \
               --ignorefile /work/.trivyignore \
-              "$image"
+              --format json \
+              "$image" > "$report_json"
             RC=$?
             set -e
             echo "::endgroup::"
@@ -113,7 +116,11 @@ jobs:
             if [ "$RC" -ne 0 ]; then
               FAILED_IMAGES+=("$image")
               echo "::error title=Trivy failed::Image '$image' has non-ignored CRITICAL findings."
+              echo "Non-ignored CVEs for $image:"
+              grep -Eo 'CVE-[0-9]{4}-[0-9]+' "$report_json" | sort -u | sed 's/^/ - /' || true
             fi
+
+            rm -f "$report_json"
           done < /tmp/compose-images.txt
 
           if [ "${#FAILED_IMAGES[@]}" -gt 0 ]; then
