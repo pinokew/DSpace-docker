@@ -114,6 +114,78 @@ warn_check() {
   return 0
 }
 
+require_header() {
+  local name="$1"
+  local url="$2"
+  local header_name="$3"
+  local expected_regex="$4"
+
+  log "🔎 Header check: $name"
+  log "    URL: $url"
+  log "    Expect: $header_name ~ $expected_regex"
+
+  local headers actual
+  headers="$(curl -sSI --max-time 12 --connect-timeout 5 "$url" || true)"
+  actual="$(echo "$headers" | awk -v k="$header_name" '
+    BEGIN { kl=tolower(k) ":" }
+    tolower($0) ~ "^" kl {
+      sub(/^[^:]*:[[:space:]]*/, "", $0)
+      sub(/\r$/, "", $0)
+      print
+      exit
+    }')"
+
+  if [[ -z "$actual" ]]; then
+    fail "Missing header '$header_name' for $name"
+  fi
+
+  if ! echo "$actual" | grep -Eqi "$expected_regex"; then
+    fail "Header mismatch for $name: $header_name='$actual'"
+  fi
+
+  log "✅ Header OK ($name): $header_name='$actual'"
+}
+
+require_cors_safety() {
+  local api_url="$1"
+  local origin="$2"
+  local host_header="$3"
+
+  log "🔎 CORS safety check"
+  log "    API URL: $api_url"
+  log "    Origin: $origin"
+
+  local headers acao acc
+  headers="$(curl -sS -D - -o /dev/null \
+    --max-time 12 --connect-timeout 5 \
+    -X OPTIONS \
+    -H "Origin: $origin" \
+    -H "Access-Control-Request-Method: GET" \
+    -H "Host: $host_header" \
+    "$api_url" || true)"
+
+  acao="$(echo "$headers" | awk '
+    tolower($0) ~ /^access-control-allow-origin:/ {
+      sub(/^[^:]*:[[:space:]]*/, "", $0)
+      sub(/\r$/, "", $0)
+      print
+      exit
+    }')"
+  acc="$(echo "$headers" | awk '
+    tolower($0) ~ /^access-control-allow-credentials:/ {
+      sub(/^[^:]*:[[:space:]]*/, "", $0)
+      sub(/\r$/, "", $0)
+      print
+      exit
+    }')"
+
+  if [[ "$acao" == "*" ]] && echo "$acc" | grep -Eqi '^true$'; then
+    fail "Insecure CORS combination detected: ACAO='*' with Allow-Credentials='true'"
+  fi
+
+  log "✅ CORS policy safe: ACAO='${acao:-<none>}', Allow-Credentials='${acc:-<none>}'"
+}
+
 warn_sitemap_check() {
   local name="$1"
   local url1="$2"
@@ -146,6 +218,7 @@ ENV_FILE="$SCRIPT_DIR/../.env"
 load_env "$ENV_FILE"
 
 HOST="${DSPACE_HOSTNAME:-repo.fby.com.ua}"
+ORIGIN="https://${HOST}"
 
 UI_URL="https://${HOST}/"
 API_URL="https://${HOST}/server/api/core/sites"
@@ -160,6 +233,19 @@ log "🚦 Smoke tests starting for host: ${HOST}"
 require_check "UI Home" "$UI_URL" 200 "" "DSpace" 20 5
 require_check "REST API core/sites" "$API_URL" 200 "json" "" 30 3
 require_check "OAI Identify" "$OAI_URL" 200 "" "Identify" 20 5
+
+# Security headers (must be visible on UI and API)
+require_header "UI nosniff" "$UI_URL" "X-Content-Type-Options" "^nosniff$"
+require_header "UI frame policy" "$UI_URL" "X-Frame-Options" "^(SAMEORIGIN|DENY)$"
+require_header "UI referrer policy" "$UI_URL" "Referrer-Policy" "^strict-origin-when-cross-origin$"
+require_header "UI CSP report-only" "$UI_URL" "Content-Security-Policy-Report-Only" ".+"
+
+require_header "API nosniff" "$API_URL" "X-Content-Type-Options" "^nosniff$"
+require_header "API frame policy" "$API_URL" "X-Frame-Options" "^(SAMEORIGIN|DENY)$"
+require_header "API referrer policy" "$API_URL" "Referrer-Policy" "^strict-origin-when-cross-origin$"
+require_header "API CSP report-only" "$API_URL" "Content-Security-Policy-Report-Only" ".+"
+
+require_cors_safety "$API_URL" "$ORIGIN" "$HOST"
 
 # Sitemap: WARNING-only (nightly generation)
 warn_sitemap_check "Sitemap (optional)" "$SITEMAP_URL1" "$SITEMAP_URL2"

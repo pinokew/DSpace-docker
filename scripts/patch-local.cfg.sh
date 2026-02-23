@@ -67,7 +67,6 @@ remove_config() {
 
 # --- 2. CLEANUP ---
 echo "🧹 Cleaning up unstable Spring Boot configs..."
-remove_config "server.forward-headers-strategy" "$TARGET_FILE"
 remove_config "server.tomcat.internal-proxies" "$TARGET_FILE"
 remove_config "server.tomcat.remote-ip-header" "$TARGET_FILE"
 remove_config "server.tomcat.protocol-header" "$TARGET_FILE"
@@ -94,6 +93,8 @@ set_config "solr.server" "$SOLR_URL" "$TARGET_FILE"
 set_config "useProxies" "true" "$TARGET_FILE"
 # Довіряємо тільки нашій підмережі (Docker Network), де живе Traefik
 set_config "proxies.trusted.ipranges" "${DSPACENET_SUBNET:-172.23.0.0/16}" "$TARGET_FILE"
+# Обробка X-Forwarded-* від reverse proxy (важливо для secure cookies/OIDC redirect URLs)
+set_config "server.forward-headers-strategy" "framework" "$TARGET_FILE"
 
 # --- 7. CORS (METHODS & ORIGINS) ---
 # Додано allowed-methods

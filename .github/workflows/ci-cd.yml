@@ -65,7 +65,7 @@ jobs:
 
           echo "✅ Patching script executed without errors."
 
-      - name: 🛡️ Trivy Vulnerability Scanner (Compose)
+      - name: 🛡️ Trivy Config Scan (Critical gate)
         # pinned version (не master)
         uses: aquasecurity/trivy-action@0.28.0
         with:
@@ -73,8 +73,34 @@ jobs:
           scan-ref: '.'
           hide-progress: false
           format: 'table'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0' # Постав '1', якщо хочеш, щоб CI падав через вразливості
+          severity: 'CRITICAL'
+          exit-code: '1'
+
+      - name: 🛡️ Trivy Image Scan (Critical gate)
+        run: |
+          set -euo pipefail
+          cp example.env .env
+
+          docker compose -f docker-compose.yml --env-file .env config --images \
+            | sort -u > /tmp/compose-images.txt
+
+          echo "Images to scan:"
+          cat /tmp/compose-images.txt
+
+          TRIVY_IMAGE="aquasec/trivy:0.60.0"
+          docker pull "$TRIVY_IMAGE"
+
+          while IFS= read -r image; do
+            [ -n "$image" ] || continue
+            echo "Scanning image: $image"
+            docker run --rm \
+              -v "$HOME/.cache/trivy:/root/.cache/" \
+              "$TRIVY_IMAGE" image \
+              --severity CRITICAL \
+              --exit-code 1 \
+              --ignore-unfixed \
+              "$image"
+          done < /tmp/compose-images.txt
 
   # ==========================================
   # 7.2 CD: Continuous Deployment (Деплой)

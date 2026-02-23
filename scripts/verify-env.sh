@@ -7,12 +7,14 @@ set -e
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 EXAMPLE_ENV="$SCRIPT_DIR/../example.env"
 ACTUAL_ENV="$SCRIPT_DIR/../.env"
+CI_MOCK=false
 
 # Якщо скрипт запускається в CI/CD середовищі без реального .env,
 # ми можемо передати прапорець --ci-mock, щоб він не падав, а просто перевіряв синтаксис
 if [[ "$1" == "--ci-mock" ]]; then
     echo "🧪 CI Mode: Mocking .env from example.env"
     cp "$EXAMPLE_ENV" "$ACTUAL_ENV"
+    CI_MOCK=true
 fi
 
 if [ ! -f "$EXAMPLE_ENV" ]; then
@@ -23,6 +25,14 @@ fi
 if [ ! -f "$ACTUAL_ENV" ]; then
     echo "❌ Error: .env not found! Please copy example.env to .env and fill it."
     exit 1
+fi
+
+if [ "$CI_MOCK" != "true" ]; then
+    ENV_MODE="$(stat -c '%a' "$ACTUAL_ENV" 2>/dev/null || true)"
+    if [ "$ENV_MODE" != "600" ]; then
+        echo "❌ Security check failed: .env permissions must be 600 (current: ${ENV_MODE:-unknown})."
+        exit 1
+    fi
 fi
 
 echo "🔍 Validating .env against example.env..."
