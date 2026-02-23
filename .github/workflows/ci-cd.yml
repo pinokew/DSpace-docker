@@ -81,6 +81,20 @@ jobs:
           set -euo pipefail
           cp example.env .env
 
+          IGNORE_FILE=".trivyignore.yaml"
+          if [ ! -f "$IGNORE_FILE" ]; then
+            echo "❌ Missing $IGNORE_FILE"
+            exit 1
+          fi
+
+          TODAY_UTC="$(date -u +%F)"
+          EXPIRED_DATES="$(awk '/^[[:space:]]*expired_at:[[:space:]]*/ {print $2}' "$IGNORE_FILE" | tr -d '"' | awk -v today="$TODAY_UTC" '$1 < today {print $1}')"
+          if [ -n "$EXPIRED_DATES" ]; then
+            echo "::error title=Expired Trivy ignores::Found expired ignore entries in $IGNORE_FILE (today: $TODAY_UTC)"
+            printf '%s\n' "$EXPIRED_DATES" | sed 's/^/ - expired_at: /'
+            exit 1
+          fi
+
           docker compose -f docker-compose.yml --env-file .env config --images \
             | sort -u > /tmp/compose-images.txt
 
@@ -106,7 +120,7 @@ jobs:
               --severity CRITICAL \
               --exit-code 1 \
               --ignore-unfixed \
-              --ignorefile /work/.trivyignore \
+              --ignorefile /work/.trivyignore.yaml \
               --format json \
               "$image" > "$report_json"
             RC=$?
