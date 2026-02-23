@@ -1,0 +1,11 @@
+# Temporary risk-accepted exceptions for upstream DSpace images.
+# Keep this file minimal and review regularly.
+#
+# CVE-2024-47561: apache-avro transitive dependency in DSpace stack.
+CVE-2024-47561
+# CVE-2025-66516: apache-tika transitive dependency in DSpace stack.
+CVE-2025-66516
+# CVE-2025-54988: apache-tika PDF parser transitive dependency.
+CVE-2025-54988
+# CVE-2025-12383: jersey-client transitive dependency.
+CVE-2025-12383

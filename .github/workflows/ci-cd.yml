@@ -95,10 +95,12 @@ jobs:
             echo "Scanning image: $image"
             docker run --rm \
               -v "$HOME/.cache/trivy:/root/.cache/" \
+              -v "${PWD}:/work" \
               "$TRIVY_IMAGE" image \
               --severity CRITICAL \
               --exit-code 1 \
               --ignore-unfixed \
+              --ignorefile /work/.trivyignore \
               "$image"
           done < /tmp/compose-images.txt
 
