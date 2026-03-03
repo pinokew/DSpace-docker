@@ -1,63 +1,79 @@
 name: DSpace CI/CD Pipeline
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
     tags:
       - 'v*.*.*'
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dspace-ci-cd-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SHELLCHECK_IMAGE: koalaman/shellcheck@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
+  TRIVY_IMAGE: aquasec/trivy@sha256:3d1f862cb6c4fe13c1506f96f816096030d8d5ccdb2380a3069f7bf07daa86aa
+
+  DEPLOY_PROJECT_DIR: /home/pinokew/Dspace/DSpace-docker
+  DEPLOY_BRANCH: main
+  DEPLOY_COMPOSE_FILE: docker-compose.yml
 
 jobs:
-  # ==========================================
-  # 7.1 CI: Continuous Integration (Перевірки)
-  # ==========================================
   ci-checks:
+    name: ci-checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+          fetch-depth: 1
 
-      - name: 🛠️ Install tools
+      - name: Pull CI utility images
         run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
+          set -euo pipefail
+          docker pull "${SHELLCHECK_IMAGE}"
+          docker pull "${TRIVY_IMAGE}"
 
-      - name: 🐚 Run Shellcheck (Script Validation)
+      - name: Shellcheck
         run: |
-          # Перевіряємо ВСІ bash-скрипти у scripts/ включно з підпапками
-          find scripts -type f -name "*.sh" -print0 \
-            | xargs -0 shellcheck -e SC1090,SC1091,SC2034,SC2046,SC2086,SC2155
+          set -euo pipefail
+          mapfile -t files < <(find scripts -type f -name '*.sh' | sort)
+          [ "${#files[@]}" -gt 0 ] || { echo "No shell scripts found under scripts/"; exit 1; }
+          docker run --rm -v "$PWD:/work" -w /work "${SHELLCHECK_IMAGE}" \
+            -x -e SC1090,SC1091,SC2034,SC2046,SC2086,SC2155 "${files[@]}"
 
-      - name: 🐳 YAML Validation (Docker Compose Config)
+      - name: Compose validation
         run: |
-          # Створюємо dummy .env, щоб docker compose не сварився на відсутні змінні
+          set -euo pipefail
           cp example.env .env
-
-          # Валідація синтаксису compose
           docker compose -f docker-compose.yml --env-file .env config -q
 
-          # Додаткова перевірка: після рендеру не повинно лишатися ${...}
           docker compose -f docker-compose.yml --env-file .env config \
             | grep -n "\${" && { echo "❌ Unresolved variables found in rendered compose"; exit 1; } || true
 
           echo "✅ docker-compose.yml is valid."
 
-      - name: 🔑 Env Validation (CI mock)
+      - name: Env validation (CI mock)
         run: |
+          set -euo pipefail
           chmod +x scripts/verify-env.sh
           ./scripts/verify-env.sh --ci-mock
 
-      - name: ⚙️ Config Patching Dry-Run
+      - name: Config patching dry-run
         run: |
-          # Готуємо мінімальну структуру, якщо патчер очікує файл
+          set -euo pipefail
           mkdir -p dspace/config
           touch dspace/config/local.cfg
-
-          # Використовуємо dummy .env (з example.env), щоб патчер не падав на відсутніх ключах
           cp example.env .env
 
           chmod +x scripts/patch-local.cfg.sh
@@ -65,92 +81,15 @@ jobs:
 
           echo "✅ Patching script executed without errors."
 
-      - name: 🛡️ Trivy Config Scan (Critical gate)
-        # pinned version (не master)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: 'config'
-          scan-ref: '.'
-          hide-progress: false
-          format: 'table'
-          severity: 'CRITICAL'
-          exit-code: '1'
-
-      - name: 🛡️ Trivy Image Scan (Critical gate)
+      - name: Trivy Config Scan (Critical gate)
         run: |
           set -euo pipefail
-          cp example.env .env
+          docker run --rm -v "$PWD:/work" -w /work "${TRIVY_IMAGE}" \
+            config --skip-check-update --exit-code 1 --severity CRITICAL /work
 
-          IGNORE_FILE=".trivyignore.yaml"
-          if [ ! -f "$IGNORE_FILE" ]; then
-            echo "❌ Missing $IGNORE_FILE"
-            exit 1
-          fi
-
-          TODAY_UTC="$(date -u +%F)"
-          EXPIRED_DATES="$(awk '/^[[:space:]]*expired_at:[[:space:]]*/ {print $2}' "$IGNORE_FILE" | tr -d '"' | awk -v today="$TODAY_UTC" '$1 < today {print $1}')"
-          if [ -n "$EXPIRED_DATES" ]; then
-            echo "::error title=Expired Trivy ignores::Found expired ignore entries in $IGNORE_FILE (today: $TODAY_UTC)"
-            printf '%s\n' "$EXPIRED_DATES" | sed 's/^/ - expired_at: /'
-            exit 1
-          fi
-
-          docker compose -f docker-compose.yml --env-file .env config --images \
-            | sort -u > /tmp/compose-images.txt
-
-          echo "Images to scan:"
-          cat /tmp/compose-images.txt
-
-          TRIVY_IMAGE="aquasec/trivy:0.60.0"
-          docker pull "$TRIVY_IMAGE"
-
-          FAILED_IMAGES=()
-
-          while IFS= read -r image; do
-            [ -n "$image" ] || continue
-            echo "::group::Trivy scan: $image"
-            report_json="$(mktemp)"
-            set +e
-            docker run --rm \
-              -v "$HOME/.cache/trivy:/root/.cache/" \
-              -v "${PWD}:/work" \
-              "$TRIVY_IMAGE" image \
-              --quiet \
-              --scanners vuln \
-              --severity CRITICAL \
-              --exit-code 1 \
-              --ignore-unfixed \
-              --ignorefile /work/.trivyignore.yaml \
-              --format json \
-              "$image" > "$report_json"
-            RC=$?
-            set -e
-            echo "::endgroup::"
-
-            if [ "$RC" -ne 0 ]; then
-              FAILED_IMAGES+=("$image")
-              echo "::error title=Trivy failed::Image '$image' has non-ignored CRITICAL findings."
-              echo "Non-ignored CVEs for $image:"
-              grep -Eo 'CVE-[0-9]{4}-[0-9]+' "$report_json" | sort -u | sed 's/^/ - /' || true
-            fi
-
-            rm -f "$report_json"
-          done < /tmp/compose-images.txt
-
-          if [ "${#FAILED_IMAGES[@]}" -gt 0 ]; then
-            echo "❌ Trivy failed for image(s):"
-            printf ' - %s\n' "${FAILED_IMAGES[@]}"
-            exit 1
-          fi
-
-          echo "✅ Trivy image scan passed for all images."
-
-  # ==========================================
-  # 7.2 CD: Continuous Deployment (Деплой)
-  # ==========================================
   cd-deploy:
+    name: cd-deploy
     needs: ci-checks
-    # Запускаємо деплой ТІЛЬКИ для push (не PR): або main, або тег релізу v*.*.*
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -160,69 +99,71 @@ jobs:
     env:
       DEPLOY_FULL_REF: ${{ github.ref }}
       DEPLOY_REF: ${{ github.ref_name }}
+      TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
     steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4
-
-      - name: 🖧 Connect to Tailscale
-        uses: tailscale/github-action@v2
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          persist-credentials: false
+          fetch-depth: 1
 
-      - name: 🚀 Deploy to Server via SSH
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Validate deploy secrets
+        run: |
+          set -euo pipefail
+          [ -n "${{ secrets.SERVER_HOST }}" ] || { echo "Missing secret: SERVER_HOST"; exit 1; }
+          [ -n "${{ secrets.SERVER_USER }}" ] || { echo "Missing secret: SERVER_USER"; exit 1; }
+          [ -n "${{ secrets.SERVER_SSH_KEY }}" ] || { echo "Missing secret: SERVER_SSH_KEY"; exit 1; }
+
+      - name: Connect to Tailscale
+        if: env.TAILSCALE_AUTHKEY != ''
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ env.TAILSCALE_AUTHKEY }}
+
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          # Передаємо ref у віддалений скрипт
-          envs: DEPLOY_FULL_REF,DEPLOY_REF
+          envs: DEPLOY_FULL_REF,DEPLOY_REF,DEPLOY_PROJECT_DIR,DEPLOY_BRANCH,DEPLOY_COMPOSE_FILE
           script: |
             set -euo pipefail
 
-            echo "Starting deployment..."
+            echo "Starting deployment for ${DEPLOY_REF} (${DEPLOY_FULL_REF})"
+            cd "${DEPLOY_PROJECT_DIR}"
 
-            PROJECT_DIR="${HOME}/Dspace/DSpace-docker"
-            cd "$PROJECT_DIR"
-
-            # 0) SSOT .env must exist
             if [ ! -f .env ]; then
-              echo "❌ ERROR: .env not found in $PROJECT_DIR. SSOT is missing."
+              echo "❌ ERROR: .env not found in ${DEPLOY_PROJECT_DIR}. SSOT is missing."
               exit 1
             fi
 
-            # 1) Safe update code (no git pull)
             git fetch --prune --tags origin
 
-            # 1.1) Deploy tag or main (avoid commands that return 1 in conditions)
             case "${DEPLOY_FULL_REF}" in
               refs/tags/*)
                 echo "Deploying tag: ${DEPLOY_REF}"
                 git checkout -f "${DEPLOY_REF}"
                 ;;
               *)
-                echo "Deploying branch: main"
-                git checkout -f main
-                git reset --hard origin/main
+                echo "Deploying branch: ${DEPLOY_BRANCH}"
+                git checkout -f "${DEPLOY_BRANCH}"
+                git reset --hard "origin/${DEPLOY_BRANCH}"
                 ;;
             esac
 
-            # 2) Script permissions
             chmod +x scripts/*.sh || true
 
-            # 3) Patch configs from SSOT (.env)
             chmod +x scripts/patch-local.cfg.sh
             ./scripts/patch-local.cfg.sh
 
-            # 4) Pull + up
-            docker compose pull
-            docker compose up -d --remove-orphans
+            docker compose -f "${DEPLOY_COMPOSE_FILE}" pull
+            docker compose -f "${DEPLOY_COMPOSE_FILE}" up -d --remove-orphans
 
-            # 5) Smoke tests
             chmod +x scripts/smoke-test.sh
             ./scripts/smoke-test.sh || {
               echo "---- docker compose ps ----"
-              docker compose ps || true
+              docker compose -f "${DEPLOY_COMPOSE_FILE}" ps || true
 
               echo "---- dspace logs ----"
               docker logs --tail=120 dspace || true
@@ -237,5 +178,3 @@ jobs:
             }
 
             echo "✅ DEPLOY OK"
-
-            
