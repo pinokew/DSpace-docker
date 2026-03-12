@@ -19,8 +19,14 @@ services:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
+      - "--entrypoints.metrics.address=:8082"
       - "--entrypoints.web.forwardedHeaders.insecure=false"
       - "--entrypoints.web.forwardedHeaders.trustedIPs=${DSPACENET_SUBNET:-172.23.0.0/16}" 
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.entryPoint=metrics"
+      - "--metrics.prometheus.addEntryPointsLabels=true"
+      - "--metrics.prometheus.addServicesLabels=true"
+      - "--metrics.prometheus.addRoutersLabels=true"
       - "--ping=true"
     ports:
       # Tunnel-safe default: Traefik is reachable only from localhost unless explicitly opened.
@@ -247,7 +253,7 @@ services:
       
       # Налаштування сервера Node.js
       DSPACE_UI_HOST: 0.0.0.0
-      DSPACE_UI_PORT: 8081
+      DSPACE_UI_PORT: ${DSPACE_UI_PORT:-8081}
       DSPACE_UI_SSL: "false"
     logging:
       driver: "json-file"

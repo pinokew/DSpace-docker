@@ -6,6 +6,27 @@
 - Зміст: безпека, CI/CD gates, операційні скрипти, документація архітектури.
 - Ключові напрямки: hardening ingress, контроль вразливостей, стандартизація процесу змін.
 
+## [2026-03-04] Діагностика нічного cron-запуску `run-maintenance.sh`
+
+### Знайдено
+- Cron entry для `run-maintenance.sh` активний і тригериться щодня о `00:00` (є записи `CRON ... CMD` до `2026-03-04 00:00:01`).
+- У `crontab` редірект логів налаштовано на неіснуючий шлях:
+`/home/pinokew/Dspace/DSpace-volumes/logs/...`.
+- Фактичний каталог логів зараз:
+`/srv/DSpace-volumes/logs`.
+- Через помилку редіректу (`cannot create ... Directory nonexistent`) shell завершує команду до старту скрипта.
+- Історичний `maintenance.log` містить помилку `line 35: ---: command not found` (зафіксовано у запуску від `2026-02-18`), але поточний файл `scripts/run-maintenance.sh` проходить `bash -n` (синтаксично валідний).
+
+### Перевірено
+- `git status` (локально змінені лише `.gitignore`, `docker-compose.yml`).
+- `docker compose ps` (усі ключові сервіси `Up (healthy)`).
+- `crontab -l` (активні nightly/hourly задачі присутні).
+- `journalctl -u cron` (щоденні виклики `run-maintenance.sh`, `No MTA installed` після помилки редіректу).
+- `bash -n scripts/run-maintenance.sh` (поточний скрипт без синтаксичних помилок).
+- Дані логів:
+`/srv/DSpace-volumes/logs/maintenance.log` останній успішний запис `2026-02-18 00:00`,
+`/home/pinokew/Dspace/DSpace-volumes` відсутній.
+
 ## [2026-03-03] Нормалізація архітектурної документації та changelog-індексу
 
 ### Додано
